@@ -64,9 +64,9 @@ cd src/nft_frontend && npm install && cd ../..
 # --yes auto-confirms Candid interface changes for CI
 if [ "$REINSTALL_MODE" = true ]; then
     echo "Deploying canisters to staging (REINSTALL mode)..."
-    # Must deploy each canister separately when using --mode reinstall
     dfx deploy nft_backend --network staging --no-wallet --yes --mode reinstall
-    dfx deploy nft_frontend --network staging --no-wallet --yes --mode reinstall
+    dfx canister uninstall-code nft_frontend --network staging || true
+    dfx deploy nft_frontend --network staging --no-wallet --yes
 else
     echo "Deploying canisters to staging (upgrade only)..."
     dfx deploy --network staging --no-wallet --yes
