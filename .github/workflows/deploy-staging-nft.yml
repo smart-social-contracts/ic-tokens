@@ -1,0 +1,50 @@
+name: Deploy NFT to Staging
+
+on:
+  workflow_dispatch:
+    inputs:
+      reinstall:
+        description: 'Force reinstall (clears all canister state). Use only when state is corrupted.'
+        required: false
+        default: false
+        type: boolean
+
+env:
+  ICP_DEV_IMAGE: ghcr.io/smart-social-contracts/icp-dev-env:db60540
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment: staging
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+      
+      - name: Deploy NFT to staging
+        env:
+          IC_IDENTITY_PEM: ${{ secrets.IC_IDENTITY_PEM }}
+        run: |
+          set -e
+          
+          # Setup identity from secret
+          mkdir -p ~/.config/dfx/identity/ci
+          echo "$IC_IDENTITY_PEM" > ~/.config/dfx/identity/ci/identity.pem
+          chmod 600 ~/.config/dfx/identity/ci/identity.pem
+          
+          REINSTALL_ARG=""
+          if [ "${{ github.event.inputs.reinstall }}" = "true" ]; then
+            REINSTALL_ARG="--reinstall"
+          fi
+          
+          docker run --rm \
+            -e DFX_WARNING=-mainnet_plaintext_identity \
+            -v "$(pwd):/workspace" \
+            -v "$HOME/.config/dfx:/root/.config/dfx" \
+            -w /workspace \
+            ${{ env.ICP_DEV_IMAGE }} bash -c "
+          set -e
+          dfxvm default 0.29.0
+          pip install -q -r /workspace/nft/requirements.txt
+          dfx identity use ci
+          cd nft
+          ./scripts/deploy_staging.sh $REINSTALL_ARG"

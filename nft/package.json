@@ -1,0 +1,21 @@
+{
+  "engines": {
+    "node": ">=16.0.0"
+  },
+  "name": "nft",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "build": "dfx build",
+    "prebuild": "npm run prebuild --workspaces --if-present",
+    "start": "dfx start --background",
+    "deploy": "dfx deploy",
+    "test:backend": "python tests/backend/test_nft.py",
+    "test:integration": "./tests/integration/entrypoint.sh",
+    "test": "npm run test:backend"
+  },
+  "type": "module",
+  "workspaces": [
+    "src/nft_frontend"
+  ]
+}

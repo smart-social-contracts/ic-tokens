@@ -1,0 +1,60 @@
+{
+  "canisters": {
+    "nft_backend": {
+      "build": "python -m basilisk nft_backend src/nft_backend/src/main.py",
+      "candid": "src/nft_backend/nft_backend.did",
+      "declarations": {
+        "node_compatibility": true
+      },
+      "gzip": true,
+      "tech_stack": {
+        "cdk": {
+          "basilisk": {}
+        },
+        "language": {
+          "python": {}
+        }
+      },
+      "type": "custom",
+      "wasm": ".basilisk/nft_backend/nft_backend.wasm",
+      "metadata": [
+        {
+          "name": "candid:service"
+        }
+      ],
+      "init_arg": "(record { name = \"Simple NFT\"; symbol = \"SNFT\"; description = opt \"A simple ICRC-7/ICRC-37 NFT collection\"; supply_cap = null; test = opt true })"
+    },
+    "nft_frontend": {
+      "dependencies": [
+        "nft_backend"
+      ],
+      "source": [
+        "src/nft_frontend/dist"
+      ],
+      "type": "assets",
+      "workspace": "nft_frontend"
+    }
+  },
+  "networks": {
+    "local": {
+      "bind": "127.0.0.1:8000",
+      "type": "ephemeral"
+    },
+    "staging": {
+      "providers": ["https://icp0.io"],
+      "type": "persistent"
+    },
+    "ic": {
+      "providers": ["https://icp0.io"],
+      "type": "persistent"
+    }
+  },
+  "defaults": {
+    "build": {
+      "args": "",
+      "packtool": ""
+    }
+  },
+  "output_env_file": ".env",
+  "version": 1
+}

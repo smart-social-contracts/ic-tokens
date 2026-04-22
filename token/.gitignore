@@ -1,0 +1,56 @@
+# Various IDEs and Editors
+.vscode/
+.idea/
+**/*~
+
+# Mac OSX temporary files
+.DS_Store
+**/.DS_Store
+
+# dfx temporary files
+.dfx/
+
+# kybra build output
+.kybra/
+
+# generated files
+**/declarations/
+
+# rust
+target/
+
+# Python
+__pycache__/
+**/__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+.venv/
+env/
+*.egg-info/
+.eggs/
+*.egg
+
+# frontend code
+node_modules/
+dist/
+.svelte-kit/
+
+# environment variables
+.env
+.env.local
+.env.*.local
+
+# logs
+*.log
+dfx.log
+
+# test artifacts
+.pytest_cache/
+.coverage
+htmlcov/
+test-logs/
+lint-logs/
+deploy-logs/

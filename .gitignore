@@ -1,0 +1,10 @@
+# Local build artifacts (not canister_ids.json - we want persistent IDs)
+token/.dfx/
+token/.basilisk/
+nft/.dfx/
+nft/.basilisk/
+node_modules/
+artifacts/
+__pycache__/
+*.pyc
+.env

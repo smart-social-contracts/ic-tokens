@@ -1,0 +1,60 @@
+{
+  "canisters": {
+    "token_backend": {
+      "build": "python -m basilisk token_backend src/token_backend/src/main.py",
+      "candid": "src/token_backend/token_backend.did",
+      "declarations": {
+        "node_compatibility": true
+      },
+      "gzip": true,
+      "tech_stack": {
+        "cdk": {
+          "basilisk": {}
+        },
+        "language": {
+          "python": {}
+        }
+      },
+      "type": "custom",
+      "wasm": ".basilisk/token_backend/token_backend.wasm",
+      "metadata": [
+        {
+          "name": "candid:service"
+        }
+      ],
+      "init_arg": "(record { name = \"Simple Token\"; symbol = \"SMPL\"; decimals = 8 : nat8; total_supply = 100_000_000_000_000_000 : nat; fee = 10_000 : nat; test = opt true })"
+    },
+    "token_frontend": {
+      "dependencies": [
+        "token_backend"
+      ],
+      "source": [
+        "src/token_frontend/dist"
+      ],
+      "type": "assets",
+      "workspace": "token_frontend"
+    }
+  },
+  "networks": {
+    "local": {
+      "bind": "127.0.0.1:8000",
+      "type": "ephemeral"
+    },
+    "staging": {
+      "providers": ["https://icp0.io"],
+      "type": "persistent"
+    },
+    "ic": {
+      "providers": ["https://icp0.io"],
+      "type": "persistent"
+    }
+  },
+  "defaults": {
+    "build": {
+      "args": "",
+      "packtool": ""
+    }
+  },
+  "output_env_file": ".env",
+  "version": 1
+}
