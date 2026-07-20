@@ -1,0 +1,6 @@
+canisters:
+  - name: nft_frontend
+    recipe:
+      type: "@dfinity/asset-canister@v2.2.0"
+      configuration:
+        dir: dist

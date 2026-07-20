@@ -6,6 +6,33 @@ export const idlFactory = ({ IDL }) => {
     'description' : IDL.Opt(IDL.Text),
     'symbol' : IDL.Text,
   });
+  const Account = IDL.Record({
+    'owner' : IDL.Principal,
+    'subaccount' : IDL.Opt(IDL.Vec(IDL.Nat8)),
+  });
+  const ForceTransferArg = IDL.Record({
+    'to' : Account,
+    'token_id' : IDL.Nat,
+    'memo' : IDL.Opt(IDL.Text),
+  });
+  const GenericError = IDL.Record({
+    'message' : IDL.Text,
+    'error_code' : IDL.Nat,
+  });
+  const AuthorityError = IDL.Variant({
+    'GenericError' : GenericError,
+    'NonExistingTokenId' : IDL.Null,
+    'Unauthorized' : IDL.Null,
+    'InvalidRecipient' : IDL.Null,
+  });
+  const AuthorityResult = IDL.Variant({
+    'Ok' : IDL.Nat,
+    'Err' : AuthorityError,
+  });
+  const FreezeArg = IDL.Record({
+    'token_id' : IDL.Nat,
+    'reason' : IDL.Opt(IDL.Text),
+  });
   const TransactionRecord = IDL.Record({
     'id' : IDL.Nat,
     'to_principal' : IDL.Text,
@@ -19,10 +46,6 @@ export const idlFactory = ({ IDL }) => {
     'from_principal' : IDL.Text,
     'timestamp' : IDL.Nat64,
   });
-  const Account = IDL.Record({
-    'owner' : IDL.Principal,
-    'subaccount' : IDL.Opt(IDL.Vec(IDL.Nat8)),
-  });
   const ApprovalInfo = IDL.Record({
     'memo' : IDL.Opt(IDL.Vec(IDL.Nat8)),
     'from_subaccount' : IDL.Opt(IDL.Vec(IDL.Nat8)),
@@ -31,15 +54,15 @@ export const idlFactory = ({ IDL }) => {
     'spender' : Account,
   });
   const ApproveCollectionArg = IDL.Record({ 'approval_info' : ApprovalInfo });
-  const GenericError = IDL.Record({
+  const CreatedInFutureError = IDL.Record({ 'ledger_time' : IDL.Nat64 });
+  const GenericBatchError = IDL.Record({
     'message' : IDL.Text,
     'error_code' : IDL.Nat,
   });
-  const CreatedInFutureError = IDL.Record({ 'ledger_time' : IDL.Nat64 });
   const ApproveCollectionError = IDL.Variant({
     'GenericError' : GenericError,
     'CreatedInFuture' : CreatedInFutureError,
-    'GenericBatchError' : GenericError,
+    'GenericBatchError' : GenericBatchError,
     'TooOld' : IDL.Null,
   });
   const ApproveCollectionResult = IDL.Variant({
@@ -55,7 +78,7 @@ export const idlFactory = ({ IDL }) => {
     'NonExistingTokenId' : IDL.Null,
     'Unauthorized' : IDL.Null,
     'CreatedInFuture' : CreatedInFutureError,
-    'GenericBatchError' : GenericError,
+    'GenericBatchError' : GenericBatchError,
     'TooOld' : IDL.Null,
   });
   const ApproveTokenResult = IDL.Variant({
@@ -77,7 +100,7 @@ export const idlFactory = ({ IDL }) => {
     'GenericError' : GenericError,
     'CreatedInFuture' : CreatedInFutureError,
     'ApprovalDoesNotExist' : IDL.Null,
-    'GenericBatchError' : GenericError,
+    'GenericBatchError' : GenericBatchError,
     'TooOld' : IDL.Null,
   });
   const RevokeCollectionApprovalResult = IDL.Variant({
@@ -97,7 +120,7 @@ export const idlFactory = ({ IDL }) => {
     'Unauthorized' : IDL.Null,
     'CreatedInFuture' : CreatedInFutureError,
     'ApprovalDoesNotExist' : IDL.Null,
-    'GenericBatchError' : GenericError,
+    'GenericBatchError' : GenericBatchError,
     'TooOld' : IDL.Null,
   });
   const RevokeTokenApprovalResult = IDL.Variant({
@@ -120,7 +143,7 @@ export const idlFactory = ({ IDL }) => {
     'Unauthorized' : IDL.Null,
     'CreatedInFuture' : CreatedInFutureError,
     'InvalidRecipient' : IDL.Null,
-    'GenericBatchError' : GenericError,
+    'GenericBatchError' : GenericBatchError,
     'TooOld' : IDL.Null,
   });
   const TransferFromResult = IDL.Variant({
@@ -148,12 +171,12 @@ export const idlFactory = ({ IDL }) => {
     'Unauthorized' : IDL.Null,
     'CreatedInFuture' : CreatedInFutureError,
     'InvalidRecipient' : IDL.Null,
-    'GenericBatchError' : GenericError,
+    'GenericBatchError' : GenericBatchError,
     'TooOld' : IDL.Null,
   });
   const TransferResult = IDL.Variant({ 'Ok' : IDL.Nat, 'Err' : TransferError });
   const MintArg = IDL.Record({
-    'token_id' : IDL.Nat,
+    'token_id' : IDL.Opt(IDL.Nat),
     'owner' : Account,
     'metadata' : IDL.Opt(IDL.Vec(IDL.Tuple(IDL.Text, MetadataValue))),
   });
@@ -164,7 +187,17 @@ export const idlFactory = ({ IDL }) => {
     'TokenIdAlreadyExists' : IDL.Null,
   });
   const MintResult = IDL.Variant({ 'Ok' : IDL.Nat, 'Err' : MintError });
+  const TransferAuthorityArg = IDL.Record({
+    'token_id' : IDL.Nat,
+    'memo' : IDL.Opt(IDL.Text),
+    'new_authority' : IDL.Principal,
+  });
   return IDL.Service({
+    '__get_candid_interface_tmp_hack' : IDL.Func([], [IDL.Text], ['query']),
+    'add_authorized_minter' : IDL.Func([IDL.Text], [IDL.Text], []),
+    'force_transfer' : IDL.Func([ForceTransferArg], [AuthorityResult], []),
+    'freeze_token' : IDL.Func([FreezeArg], [AuthorityResult], []),
+    'get_token_authority' : IDL.Func([IDL.Nat], [IDL.Opt(IDL.Text)], ['query']),
     'get_transactions' : IDL.Func(
         [IDL.Nat, IDL.Nat],
         [IDL.Vec(TransactionRecord)],
@@ -248,7 +281,16 @@ export const idlFactory = ({ IDL }) => {
         [],
       ),
     'is_test_mode' : IDL.Func([], [IDL.Bool], ['query']),
+    'is_token_frozen' : IDL.Func([IDL.Nat], [IDL.Bool], ['query']),
+    'list_authorized_minters' : IDL.Func([], [IDL.Vec(IDL.Text)], ['query']),
     'mint' : IDL.Func([MintArg], [MintResult], []),
+    'remove_authorized_minter' : IDL.Func([IDL.Text], [IDL.Text], []),
+    'transfer_authority' : IDL.Func(
+        [TransferAuthorityArg],
+        [AuthorityResult],
+        [],
+      ),
+    'unfreeze_token' : IDL.Func([IDL.Nat], [AuthorityResult], []),
   });
 };
 export const init = ({ IDL }) => {

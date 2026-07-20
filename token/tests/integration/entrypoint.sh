@@ -29,7 +29,7 @@ dfx identity new test_bob --storage-mode plaintext 2>/dev/null || true
 dfx identity new test_charlie --storage-mode plaintext 2>/dev/null || true
 
 echo "Deploying token_backend..."
-INIT_ARG='(record { name = "Simple Token"; symbol = "SMPL"; decimals = 8 : nat8; total_supply = 100000000000000000 : nat; fee = 10000 : nat; test = opt true })'
+INIT_ARG='(record { name = "Simple Token"; symbol = "SMPL"; decimals = 8 : nat8; total_supply = 100000000000000000 : nat; fee = 10000 : nat; test = opt true; initial_owner = null })'
 dfx deploy token_backend --mode reinstall --argument "$INIT_ARG" --yes
 
 echo ""

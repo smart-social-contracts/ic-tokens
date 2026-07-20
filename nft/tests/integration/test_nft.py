@@ -147,21 +147,21 @@ def run_tests():
     # Mint NFT #1 to alice
     result = dfx_call(
         "mint",
-        f'(record {{ token_id = 1 : nat; owner = record {{ owner = principal "{alice}"; subaccount = null }}; metadata = opt vec {{ record {{ "name"; variant {{ Text = "Alice NFT" }} }} }} }})',
+        f'(record {{ token_id = opt (1 : nat); owner = record {{ owner = principal "{alice}"; subaccount = null }}; metadata = opt vec {{ record {{ "name"; variant {{ Text = "Alice NFT" }} }} }} }})',
     )
     assert_contains(result, "Ok", "mint NFT #1 to alice succeeds")
 
     # Mint NFT #2 to bob
     result = dfx_call(
         "mint",
-        f'(record {{ token_id = 2 : nat; owner = record {{ owner = principal "{bob}"; subaccount = null }}; metadata = opt vec {{ record {{ "name"; variant {{ Text = "Bob NFT" }} }} }} }})',
+        f'(record {{ token_id = opt (2 : nat); owner = record {{ owner = principal "{bob}"; subaccount = null }}; metadata = opt vec {{ record {{ "name"; variant {{ Text = "Bob NFT" }} }} }} }})',
     )
     assert_contains(result, "Ok", "mint NFT #2 to bob succeeds")
 
     # Mint NFT #3 to alice
     result = dfx_call(
         "mint",
-        f'(record {{ token_id = 3 : nat; owner = record {{ owner = principal "{alice}"; subaccount = null }}; metadata = null }})',
+        f'(record {{ token_id = opt (3 : nat); owner = record {{ owner = principal "{alice}"; subaccount = null }}; metadata = null }})',
     )
     assert_contains(result, "Ok", "mint NFT #3 to alice succeeds")
 
@@ -172,7 +172,7 @@ def run_tests():
     # Try to mint duplicate token ID
     result = dfx_call(
         "mint",
-        f'(record {{ token_id = 1 : nat; owner = record {{ owner = principal "{charlie}"; subaccount = null }}; metadata = null }})',
+        f'(record {{ token_id = opt (1 : nat); owner = record {{ owner = principal "{charlie}"; subaccount = null }}; metadata = null }})',
     )
     assert_contains(result, "Err", "mint duplicate token ID fails")
 
@@ -295,7 +295,7 @@ def run_tests():
     # Alice uses approval to transfer NFT #2 from bob to charlie
     result = dfx_call(
         "icrc37_transfer_from",
-        f'(vec {{ record {{ spender_subaccount = null; from_ = record {{ owner = principal "{bob}"; subaccount = null }}; to = record {{ owner = principal "{charlie}"; subaccount = null }}; token_id = 2 : nat; memo = null; created_at_time = null }} }})',
+        f'(vec {{ record {{ spender_subaccount = null; from = record {{ owner = principal "{bob}"; subaccount = null }}; to = record {{ owner = principal "{charlie}"; subaccount = null }}; token_id = 2 : nat; memo = null; created_at_time = null }} }})',
         identity="test_alice",
     )
     assert_contains(result, "Ok", "alice transfers NFT #2 from bob to charlie")
@@ -307,7 +307,7 @@ def run_tests():
     # Transfer from without approval fails
     result = dfx_call(
         "icrc37_transfer_from",
-        f'(vec {{ record {{ spender_subaccount = null; from_ = record {{ owner = principal "{charlie}"; subaccount = null }}; to = record {{ owner = principal "{alice}"; subaccount = null }}; token_id = 1 : nat; memo = null; created_at_time = null }} }})',
+        f'(vec {{ record {{ spender_subaccount = null; from = record {{ owner = principal "{charlie}"; subaccount = null }}; to = record {{ owner = principal "{alice}"; subaccount = null }}; token_id = 1 : nat; memo = null; created_at_time = null }} }})',
         identity="test_bob",
     )
     assert_contains(result, "Err", "transfer_from without approval fails")
@@ -329,7 +329,7 @@ def run_tests():
     # Deployer can now transfer any of charlie's NFTs
     result = dfx_call(
         "icrc37_transfer_from",
-        f'(vec {{ record {{ spender_subaccount = null; from_ = record {{ owner = principal "{charlie}"; subaccount = null }}; to = record {{ owner = principal "{alice}"; subaccount = null }}; token_id = 1 : nat; memo = null; created_at_time = null }} }})',
+        f'(vec {{ record {{ spender_subaccount = null; from = record {{ owner = principal "{charlie}"; subaccount = null }}; to = record {{ owner = principal "{alice}"; subaccount = null }}; token_id = 1 : nat; memo = null; created_at_time = null }} }})',
     )
     assert_contains(result, "Ok", "deployer transfers NFT #1 from charlie to alice using collection approval")
 
@@ -358,14 +358,16 @@ def run_tests():
         "icrc7_tokens_of",
         f'(record {{ owner = principal "{alice}"; subaccount = null }}, null, null)',
     )
-    assert_true(1 in result and 3 in result, "alice owns NFT #1 and #3")
+    owned = [parse_nat(v) for v in result] if isinstance(result, list) else []
+    assert_true(1 in owned and 3 in owned, "alice owns NFT #1 and #3")
 
     # Charlie should own NFT #2
     result = dfx_call(
         "icrc7_tokens_of",
         f'(record {{ owner = principal "{charlie}"; subaccount = null }}, null, null)',
     )
-    assert_true(2 in result, "charlie owns NFT #2")
+    owned = [parse_nat(v) for v in result] if isinstance(result, list) else []
+    assert_true(2 in owned, "charlie owns NFT #2")
 
     # Bob should own nothing
     result = dfx_call(
@@ -373,6 +375,350 @@ def run_tests():
         f'(record {{ owner = principal "{bob}"; subaccount = null }})',
     )
     assert_equals(0, result, "bob has 0 NFTs after transfers")
+
+    # ==========================================
+    # Sequential Auto-Assigned Token IDs
+    # ==========================================
+    print()
+    print("--- Sequential Auto-Assigned Token ID Tests ---")
+
+    result = dfx_call(
+        "mint",
+        f'(record {{ token_id = null; owner = record {{ owner = principal "{bob}"; subaccount = null }}; metadata = null }})',
+    )
+    assert_contains(result, "Ok", "mint with auto-assigned token ID succeeds")
+    auto_id_1 = parse_nat(result.get("Ok")) if isinstance(result, dict) else None
+    assert_equals(4, auto_id_1, "auto-assigned token ID is sequential (4)")
+
+    result = dfx_call(
+        "mint",
+        f'(record {{ token_id = null; owner = record {{ owner = principal "{bob}"; subaccount = null }}; metadata = null }})',
+    )
+    auto_id_2 = parse_nat(result.get("Ok")) if isinstance(result, dict) else None
+    assert_equals(5, auto_id_2, "next auto-assigned token ID increments (5)")
+
+    # Explicit ID above the counter pushes the counter forward
+    result = dfx_call(
+        "mint",
+        f'(record {{ token_id = opt (100 : nat); owner = record {{ owner = principal "{bob}"; subaccount = null }}; metadata = null }})',
+    )
+    assert_contains(result, "Ok", "mint with explicit high token ID succeeds")
+
+    result = dfx_call(
+        "mint",
+        f'(record {{ token_id = null; owner = record {{ owner = principal "{bob}"; subaccount = null }}; metadata = null }})',
+    )
+    auto_id_3 = parse_nat(result.get("Ok")) if isinstance(result, dict) else None
+    assert_equals(101, auto_id_3, "auto-assigned ID continues after explicit high ID (101)")
+
+    # ==========================================
+    # Authority Operations: force_transfer
+    # ==========================================
+    print()
+    print("--- Authority force_transfer Tests ---")
+
+    # Token #4 was minted by the deployer (in test mode) and is owned by bob.
+    # The deployer is a canister controller, so it can force-transfer.
+    result = dfx_call(
+        "force_transfer",
+        f'(record {{ token_id = 4 : nat; to = record {{ owner = principal "{alice}"; subaccount = null }}; memo = opt "court order #42" }})',
+    )
+    assert_contains(result, "Ok", "controller force_transfer succeeds")
+
+    result = dfx_call("icrc7_owner_of", "(4 : nat)")
+    assert_contains(result, alice, "token #4 is owned by alice after force_transfer")
+
+    # Non-authority caller cannot force_transfer
+    result = dfx_call(
+        "force_transfer",
+        f'(record {{ token_id = 4 : nat; to = record {{ owner = principal "{charlie}"; subaccount = null }}; memo = null }})',
+        identity="test_bob",
+    )
+    assert_contains(result, "Err", "non-authority force_transfer fails")
+    assert_contains(result, "Unauthorized", "non-authority force_transfer is Unauthorized")
+
+    result = dfx_call("icrc7_owner_of", "(4 : nat)")
+    assert_contains(result, alice, "token #4 still owned by alice after failed force_transfer")
+
+    # Force transfer of non-existent token fails
+    result = dfx_call(
+        "force_transfer",
+        f'(record {{ token_id = 424242 : nat; to = record {{ owner = principal "{alice}"; subaccount = null }}; memo = null }})',
+    )
+    assert_contains(result, "NonExistingTokenId", "force_transfer of non-existent token fails")
+
+    # Force transfer to the current owner fails
+    result = dfx_call(
+        "force_transfer",
+        f'(record {{ token_id = 4 : nat; to = record {{ owner = principal "{alice}"; subaccount = null }}; memo = null }})',
+    )
+    assert_contains(result, "InvalidRecipient", "force_transfer to current owner fails")
+
+    # Approvals are cleared by force_transfer: alice approves bob on #4, then force-transfer
+    result = dfx_call(
+        "icrc37_approve_tokens",
+        f'(vec {{ record {{ token_id = 4 : nat; approval_info = record {{ spender = record {{ owner = principal "{bob}"; subaccount = null }}; from_subaccount = null; expires_at = null; memo = null; created_at_time = null }} }} }})',
+        identity="test_alice",
+    )
+    assert_contains(result, "Ok", "alice approves bob for token #4")
+
+    result = dfx_call(
+        "force_transfer",
+        f'(record {{ token_id = 4 : nat; to = record {{ owner = principal "{charlie}"; subaccount = null }}; memo = opt "reassignment" }})',
+    )
+    assert_contains(result, "Ok", "force_transfer of approved token succeeds")
+
+    result = dfx_call(
+        "icrc37_is_approved",
+        f'(record {{ owner = principal "{bob}"; subaccount = null }}, null, 4 : nat)',
+    )
+    assert_true(result == False or result == "false" or str(result) == "False", "approval cleared after force_transfer")
+
+    # Audit trail: force_transfer appears in the transaction log
+    result = dfx_call("get_transactions", "(0 : nat, 100 : nat)")
+    kinds = [tx.get("kind") for tx in result] if isinstance(result, list) else []
+    assert_true("force_transfer" in kinds, "force_transfer logged in transaction history")
+
+    # ==========================================
+    # Authority Operations: freeze / unfreeze
+    # ==========================================
+    print()
+    print("--- Authority freeze/unfreeze Tests ---")
+
+    # Freeze token #4 (owned by charlie)
+    result = dfx_call(
+        "freeze_token",
+        '(record { token_id = 4 : nat; reason = opt "ownership dispute" })',
+    )
+    assert_contains(result, "Ok", "controller freeze_token succeeds")
+
+    result = dfx_call("is_token_frozen", "(4 : nat)")
+    assert_true(result == True or str(result) == "True" or result == "true", "token #4 reports frozen")
+
+    # Frozen token metadata includes frozen flag
+    result = dfx_call("icrc7_token_metadata", "(4 : nat)")
+    assert_contains(result, "frozen", "token metadata exposes frozen state")
+
+    # Holder cannot transfer a frozen token
+    result = dfx_call(
+        "icrc7_transfer",
+        f'(vec {{ record {{ from_subaccount = null; to = record {{ owner = principal "{alice}"; subaccount = null }}; token_id = 4 : nat; memo = null; created_at_time = null }} }})',
+        identity="test_charlie",
+    )
+    assert_contains(result, "Err", "holder cannot transfer frozen token")
+    assert_contains(result, "frozen", "frozen transfer error mentions freeze")
+
+    # Approvals also cannot move a frozen token
+    result = dfx_call(
+        "icrc37_approve_tokens",
+        f'(vec {{ record {{ token_id = 4 : nat; approval_info = record {{ spender = record {{ owner = principal "{alice}"; subaccount = null }}; from_subaccount = null; expires_at = null; memo = null; created_at_time = null }} }} }})',
+        identity="test_charlie",
+    )
+    assert_contains(result, "Ok", "owner can still approve while frozen")
+
+    result = dfx_call(
+        "icrc37_transfer_from",
+        f'(vec {{ record {{ spender_subaccount = null; from = record {{ owner = principal "{charlie}"; subaccount = null }}; to = record {{ owner = principal "{alice}"; subaccount = null }}; token_id = 4 : nat; memo = null; created_at_time = null }} }})',
+        identity="test_alice",
+    )
+    assert_contains(result, "Err", "transfer_from blocked on frozen token")
+
+    # Authority can still force_transfer a frozen token
+    result = dfx_call(
+        "force_transfer",
+        f'(record {{ token_id = 4 : nat; to = record {{ owner = principal "{bob}"; subaccount = null }}; memo = opt "verdict executed" }})',
+    )
+    assert_contains(result, "Ok", "force_transfer works on frozen token")
+
+    result = dfx_call("icrc7_owner_of", "(4 : nat)")
+    assert_contains(result, bob, "frozen token #4 force-transferred to bob")
+
+    # Non-authority cannot freeze or unfreeze
+    result = dfx_call(
+        "freeze_token",
+        '(record { token_id = 1 : nat; reason = null })',
+        identity="test_bob",
+    )
+    assert_contains(result, "Unauthorized", "non-authority freeze fails")
+
+    result = dfx_call("unfreeze_token", "(4 : nat)", identity="test_bob")
+    assert_contains(result, "Unauthorized", "non-authority unfreeze fails")
+
+    # Unfreeze restores holder transfers
+    result = dfx_call("unfreeze_token", "(4 : nat)")
+    assert_contains(result, "Ok", "controller unfreeze_token succeeds")
+
+    result = dfx_call("is_token_frozen", "(4 : nat)")
+    assert_true(result == False or str(result) == "False" or result == "false", "token #4 no longer frozen")
+
+    result = dfx_call(
+        "icrc7_transfer",
+        f'(vec {{ record {{ from_subaccount = null; to = record {{ owner = principal "{charlie}"; subaccount = null }}; token_id = 4 : nat; memo = null; created_at_time = null }} }})',
+        identity="test_bob",
+    )
+    assert_contains(result, "Ok", "holder can transfer after unfreeze")
+
+    # Freeze/unfreeze appear in the transaction log
+    result = dfx_call("get_transactions", "(0 : nat, 200 : nat)")
+    kinds = [tx.get("kind") for tx in result] if isinstance(result, list) else []
+    assert_true("freeze" in kinds, "freeze logged in transaction history")
+    assert_true("unfreeze" in kinds, "unfreeze logged in transaction history")
+
+    # ==========================================
+    # Authority scoping (authorized-minter authority)
+    # ==========================================
+    print()
+    print("--- Authority Scoping Tests ---")
+
+    # Authorize alice as a minter, have her mint a token: alice becomes its authority
+    result = dfx_call("add_authorized_minter", f'("{alice}")')
+    assert_contains(result, "true", "controller adds alice as authorized minter")
+
+    result = dfx_call(
+        "mint",
+        f'(record {{ token_id = null; owner = record {{ owner = principal "{charlie}"; subaccount = null }}; metadata = null }})',
+        identity="test_alice",
+    )
+    assert_contains(result, "Ok", "authorized minter alice mints a token")
+    alice_token = parse_nat(result.get("Ok")) if isinstance(result, dict) else None
+
+    result = dfx_call("get_token_authority", f"({alice_token} : nat)")
+    assert_contains(result, alice, "token authority recorded as alice")
+
+    # Alice (authority) can force-transfer her token even though not a controller
+    result = dfx_call(
+        "force_transfer",
+        f'(record {{ token_id = {alice_token} : nat; to = record {{ owner = principal "{bob}"; subaccount = null }}; memo = null }})',
+        identity="test_alice",
+    )
+    assert_contains(result, "Ok", "authority (non-controller) force_transfer succeeds")
+
+    # Bob (not the authority of token #1, minted by deployer) cannot force it even though
+    # bob is not an authorized minter; and alice (authorized minter but not #1's authority)
+    # also cannot force-transfer token #1.
+    result = dfx_call(
+        "force_transfer",
+        f'(record {{ token_id = 1 : nat; to = record {{ owner = principal "{bob}"; subaccount = null }}; memo = null }})',
+        identity="test_alice",
+    )
+    assert_contains(result, "Unauthorized", "authorized minter cannot force other authority's token")
+
+    # Revoking alice's minter status also revokes her authority powers
+    result = dfx_call("remove_authorized_minter", f'("{alice}")')
+    assert_contains(result, "true", "controller removes alice from authorized minters")
+
+    result = dfx_call(
+        "freeze_token",
+        f'(record {{ token_id = {alice_token} : nat; reason = null }})',
+        identity="test_alice",
+    )
+    assert_contains(result, "Unauthorized", "revoked minter loses authority powers")
+
+    # ==========================================
+    # Authority Operations: transfer_authority
+    # ==========================================
+    print()
+    print("--- Authority transfer_authority Tests ---")
+
+    # Re-authorize alice as a minter for these tests
+    result = dfx_call("add_authorized_minter", f'("{alice}")')
+    assert_contains(result, "true", "controller re-adds alice as authorized minter")
+
+    # Controller hands over authority of token #1 to alice
+    result = dfx_call(
+        "transfer_authority",
+        f'(record {{ token_id = 1 : nat; new_authority = principal "{alice}"; memo = opt "governance handover" }})',
+    )
+    assert_contains(result, "Ok", "controller transfer_authority succeeds")
+
+    result = dfx_call("get_token_authority", "(1 : nat)")
+    assert_contains(result, alice, "token #1 authority is now alice")
+
+    # New authority (alice, authorized minter) can freeze/unfreeze token #1
+    result = dfx_call(
+        "freeze_token",
+        f'(record {{ token_id = 1 : nat; reason = null }})',
+        identity="test_alice",
+    )
+    assert_contains(result, "Ok", "new authority can freeze the token")
+    result = dfx_call("unfreeze_token", "(1 : nat)", identity="test_alice")
+    assert_contains(result, "Ok", "new authority can unfreeze the token")
+
+    # Current authority (alice) hands token #1 over to bob
+    result = dfx_call(
+        "transfer_authority",
+        f'(record {{ token_id = 1 : nat; new_authority = principal "{bob}"; memo = null }})',
+        identity="test_alice",
+    )
+    assert_contains(result, "Ok", "authority (non-controller) transfer_authority succeeds")
+
+    result = dfx_call("get_token_authority", "(1 : nat)")
+    assert_contains(result, bob, "token #1 authority is now bob")
+
+    # Old authority (alice) has lost her powers over token #1
+    result = dfx_call(
+        "freeze_token",
+        f'(record {{ token_id = 1 : nat; reason = null }})',
+        identity="test_alice",
+    )
+    assert_contains(result, "Unauthorized", "old authority loses freeze rights")
+    result = dfx_call(
+        "transfer_authority",
+        f'(record {{ token_id = 1 : nat; new_authority = principal "{alice}"; memo = null }})',
+        identity="test_alice",
+    )
+    assert_contains(result, "Unauthorized", "old authority cannot hand authority back to itself")
+
+    # Bob is the authority but not an authorized minter: no powers until added
+    result = dfx_call(
+        "freeze_token",
+        f'(record {{ token_id = 1 : nat; reason = null }})',
+        identity="test_bob",
+    )
+    assert_contains(result, "Unauthorized", "authority without minter status has no powers")
+
+    result = dfx_call("add_authorized_minter", f'("{bob}")')
+    assert_contains(result, "true", "controller adds bob as authorized minter")
+    result = dfx_call(
+        "freeze_token",
+        f'(record {{ token_id = 1 : nat; reason = null }})',
+        identity="test_bob",
+    )
+    assert_contains(result, "Ok", "authority with minter status can freeze")
+    result = dfx_call("unfreeze_token", "(1 : nat)", identity="test_bob")
+    assert_contains(result, "Ok", "authority with minter status can unfreeze")
+
+    # No-op handover is rejected
+    result = dfx_call(
+        "transfer_authority",
+        f'(record {{ token_id = 1 : nat; new_authority = principal "{bob}"; memo = null }})',
+        identity="test_bob",
+    )
+    assert_contains(result, "InvalidRecipient", "no-op authority handover fails")
+
+    # Non-existing token
+    result = dfx_call(
+        "transfer_authority",
+        f'(record {{ token_id = 999999 : nat; new_authority = principal "{alice}"; memo = null }})',
+    )
+    assert_contains(result, "NonExistingTokenId", "transfer_authority of non-existent token fails")
+
+    # Unauthorized caller (charlie, no role at all)
+    result = dfx_call(
+        "transfer_authority",
+        f'(record {{ token_id = 1 : nat; new_authority = principal "{charlie}"; memo = null }})',
+        identity="test_charlie",
+    )
+    assert_contains(result, "Unauthorized", "stranger cannot transfer authority")
+
+    # Audit trail: transfer_authority appears in the transaction log
+    result = dfx_call("get_transactions", "(0 : nat, 500 : nat)")
+    kinds = [tx.get("kind") for tx in result] if isinstance(result, list) else []
+    assert_true("transfer_authority" in kinds, "transfer_authority logged in transaction history")
+
+    # Cleanup: remove bob as minter again
+    result = dfx_call("remove_authorized_minter", f'("{bob}")')
+    assert_contains(result, "true", "controller removes bob from authorized minters")
 
     # ==========================================
     # Summary

@@ -1,8 +1,12 @@
 {
   "nft_backend": {
-    "staging": "6hrip-iiaaa-aaaaf-qdoha-cai"
+    "staging": "27sff-mqaaa-aaaah-quntq-cai",
+    "demo": "6hrip-iiaaa-aaaaf-qdoha-cai",
+    "test": "eelas-yyaaa-aaaao-qps7a-cai"
   },
   "nft_frontend": {
-    "staging": "6aqo3-fqaaa-aaaaf-qdohq-cai"
+    "staging": "3s4bl-dyaaa-aaaah-qunua-cai",
+    "demo": "6aqo3-fqaaa-aaaaf-qdohq-cai",
+    "test": "ysrkl-eqaaa-aaaas-qgosa-cai"
   }
 }

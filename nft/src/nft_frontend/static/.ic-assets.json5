@@ -3,7 +3,7 @@
         "match": "**/*",
         "security_policy": "standard",
         "headers": {
-            "Content-Security-Policy": "default-src 'self';script-src 'self' 'unsafe-eval' 'unsafe-inline';connect-src 'self' http://localhost:* https://icp0.io https://*.icp0.io https://icp-api.io;img-src 'self' data:;style-src * 'unsafe-inline';style-src-elem * 'unsafe-inline';font-src *;object-src 'none';base-uri 'self';frame-ancestors 'none';form-action 'self';upgrade-insecure-requests;",
+            "Content-Security-Policy": "default-src 'self';script-src 'self' 'unsafe-eval' 'unsafe-inline' https://unpkg.com;script-src-elem 'self' 'unsafe-inline' https://unpkg.com;connect-src 'self' http://localhost:* https://icp0.io https://*.icp0.io https://icp-api.io https://unpkg.com https://*.openfreemap.org;img-src 'self' data: https://*.openfreemap.org;style-src * 'unsafe-inline';style-src-elem * 'unsafe-inline' https://unpkg.com;worker-src 'self' blob:;font-src *;object-src 'none';base-uri 'self';frame-ancestors 'none';form-action 'self';upgrade-insecure-requests;",
         },
     },
 ]

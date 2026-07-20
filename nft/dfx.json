@@ -22,7 +22,7 @@
           "name": "candid:service"
         }
       ],
-      "init_arg": "(record { name = \"Simple NFT\"; symbol = \"SNFT\"; description = opt \"A simple ICRC-7/ICRC-37 NFT collection\"; supply_cap = null; test = opt true })"
+      "init_arg": "(record { name = \"Realms Registry Assets\"; symbol = \"RAST\"; description = opt \"ICRC-7/ICRC-37 registry for tokenized assets (land, licenses, certificates, and other unique assets)\"; supply_cap = null; test = opt false })"
     },
     "nft_frontend": {
       "dependencies": [

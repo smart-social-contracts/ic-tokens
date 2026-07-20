@@ -104,7 +104,10 @@ type TokenApproval = record { token_id : nat; approval_info : ApprovalInfo };
 type CollectionApproval = record { approval_info : ApprovalInfo };
 type InitArg = record { name : text; symbol : text; description : opt text; supply_cap : opt nat; test : opt bool };
 type MetadataValue = variant { Text : text; Blob : blob; Nat : nat; Int : int };
-type MintArg = record { token_id : nat; owner : Account; metadata : opt vec record { 0 : text; 1 : MetadataValue } };
+type MintArg = record { token_id : opt nat; owner : Account; metadata : opt vec record { 0 : text; 1 : MetadataValue } };
+type ForceTransferArg = record { token_id : nat; to : Account; memo : opt text };
+type FreezeArg = record { token_id : nat; reason : opt text };
+type TransferAuthorityArg = record { token_id : nat; new_authority : principal; memo : opt text };
 type StandardRecord = record { name : text; url : text };
 type TransactionRecord = record { id : nat; kind : text; timestamp : nat64; token_id : nat; from_principal : text; from_subaccount : text; to_principal : text; to_subaccount : text; spender_principal : text; spender_subaccount : text; memo : text };
 type TransferError = variant { NonExistingTokenId : null; InvalidRecipient : null; Unauthorized : null; TooOld : null; CreatedInFuture : CreatedInFutureError; Duplicate : DuplicateError; GenericError : GenericError; GenericBatchError : GenericBatchError };
@@ -121,6 +124,8 @@ type TransferFromError = variant { NonExistingTokenId : null; InvalidRecipient :
 type TransferFromResult = variant { Ok : nat; Err : TransferFromError };
 type MintError = variant { Unauthorized : null; TokenIdAlreadyExists : null; SupplyCapReached : null; GenericError : GenericError };
 type MintResult = variant { Ok : nat; Err : MintError };
+type AuthorityError = variant { NonExistingTokenId : null; Unauthorized : null; InvalidRecipient : null; GenericError : GenericError };
+type AuthorityResult = variant { Ok : nat; Err : AuthorityError };
 
 service : (InitArg) -> {
   "icrc7_name" : () -> (text) query;
@@ -144,8 +149,17 @@ service : (InitArg) -> {
   "icrc37_revoke_collection_approvals" : (vec RevokeCollectionApprovalArg) -> (vec opt RevokeCollectionApprovalResult);
   "icrc37_transfer_from" : (vec TransferFromArg) -> (vec opt TransferFromResult);
   "mint" : (MintArg) -> (MintResult);
+  "force_transfer" : (ForceTransferArg) -> (AuthorityResult);
+  "freeze_token" : (FreezeArg) -> (AuthorityResult);
+  "unfreeze_token" : (nat) -> (AuthorityResult);
+  "transfer_authority" : (TransferAuthorityArg) -> (AuthorityResult);
+  "is_token_frozen" : (nat) -> (bool) query;
+  "get_token_authority" : (nat) -> (opt text) query;
   "icrc7_supported_standards" : () -> (vec StandardRecord) query;
   "get_transactions" : (nat, nat) -> (vec TransactionRecord) query;
   "is_test_mode" : () -> (bool) query;
+  "list_authorized_minters" : () -> (vec text) query;
+  "add_authorized_minter" : (text) -> (text);
+  "remove_authorized_minter" : (text) -> (text);
   "__get_candid_interface_tmp_hack" : () -> (text) query;
 }

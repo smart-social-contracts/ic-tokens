@@ -1,331 +1,403 @@
 <script>
   import { onMount } from 'svelte';
   import { Principal } from '@dfinity/principal';
-  import { backend } from '$lib/canisters';
+  import { getBackend } from '$lib/canisters.js';
+  import { isAuthenticated, principal } from '$lib/stores/auth.js';
+  import {
+    metaText,
+    normalizeTokenMetadata,
+    tokenDisplayName,
+    tokenSubtitle,
+    truncate,
+  } from '$lib/metadata.js';
+  import AssetGeoMap from '$lib/components/AssetGeoMap.svelte';
+  import {
+    extractGeoFromMetadata,
+    hasGeoMetadata,
+    resolveTokenGeo,
+  } from '$lib/geo.js';
 
   let loading = true;
   let error = null;
-  
-  // Collection info
+  let actionError = '';
+  let actionSuccess = '';
+
   let collectionName = '';
   let collectionSymbol = '';
+  let collectionDescription = '';
   let totalSupply = 0;
   let supplyCap = null;
   let testMode = false;
-  
-  // NFTs
+  let authorizedMinters = [];
+
   let tokens = [];
-  let selectedToken = null;
-  
-  // Transactions
   let transactions = [];
-  
-  // Mint form
-  let mintTokenId = '';
+
   let mintOwner = '';
   let mintName = '';
+  let mintAssetType = '';
   let minting = false;
-  let mintSuccess = null;
-  let mintError = null;
+
+  $: viewer = $principal;
+  $: canMint = $isAuthenticated && authorizedMinters.includes(viewer);
 
   onMount(async () => {
     await loadData();
   });
 
+  async function backend() {
+    return getBackend();
+  }
+
+  function parseAuthorityError(result) {
+    if (!result || 'Ok' in result) return null;
+    const err = result.Err || {};
+    if ('Unauthorized' in err) return 'You are not authorized for this action.';
+    if ('NonExistingTokenId' in err) return 'Token does not exist.';
+    if ('InvalidRecipient' in err) return 'Invalid recipient.';
+    if ('GenericError' in err) return err.GenericError?.message || 'Operation failed.';
+    return 'Operation failed.';
+  }
+
+  function parseTransferError(result) {
+    if (!result || 'Ok' in result) return null;
+    const err = result.Err || {};
+    if ('Unauthorized' in err) return 'Only the owner can transfer this asset.';
+    if ('NonExistingTokenId' in err) return 'Token does not exist.';
+    if ('InvalidRecipient' in err) return 'Invalid recipient.';
+    if ('GenericError' in err) return err.GenericError?.message || 'Transfer failed.';
+    return 'Transfer failed.';
+  }
+
+  function metaTextFromList(metadata, key) {
+    return metaText(metadata, key);
+  }
+
+  async function enrichTokenGeo(token) {
+    const geo = await resolveTokenGeo(token.metadata);
+    return { ...token, geo };
+  }
+
   async function loadData() {
     try {
       loading = true;
       error = null;
-      
-      // Load collection info
-      const [name, symbol, supply, cap, test] = await Promise.all([
-        backend.icrc7_name(),
-        backend.icrc7_symbol(),
-        backend.icrc7_total_supply(),
-        backend.icrc7_supply_cap(),
-        backend.is_test_mode().catch(() => false)
+      actionError = '';
+      const actor = await backend();
+
+      const [name, symbol, supply, cap, test, minters, metadata] = await Promise.all([
+        actor.icrc7_name(),
+        actor.icrc7_symbol(),
+        actor.icrc7_total_supply(),
+        actor.icrc7_supply_cap(),
+        actor.is_test_mode().catch(() => false),
+        actor.list_authorized_minters().catch(() => []),
+        actor.icrc7_collection_metadata().catch(() => []),
       ]);
-      
+
       collectionName = name;
       collectionSymbol = symbol;
       totalSupply = Number(supply);
       supplyCap = cap && cap.length > 0 ? Number(cap[0]) : null;
-      testMode = test;
-      
-      // Load tokens
-      const tokenIds = await backend.icrc7_tokens([], []);
+      testMode = !!test;
+      authorizedMinters = minters || [];
+      collectionDescription =
+        metadata.find((entry) => entry[0] === 'icrc7:description')?.[1]?.Text || '';
+
+      const tokenIds = await actor.icrc7_tokens([], []);
       tokens = await Promise.all(
-        tokenIds.slice(0, 20).map(async (id) => {
-          const owner = await backend.icrc7_owner_of(id);
-          const metadata = await backend.icrc7_token_metadata(id).catch(() => []);
+        tokenIds.slice(0, 40).map(async (id) => {
+          const [owner, tokenMetadata, frozen, authorityOpt] = await Promise.all([
+            actor.icrc7_owner_of(id),
+            actor.icrc7_token_metadata(id).catch(() => []),
+            actor.is_token_frozen(id).catch(() => false),
+            actor.get_token_authority(id).catch(() => []),
+          ]);
+          const authority = Array.isArray(authorityOpt) && authorityOpt.length
+            ? authorityOpt[0]
+            : '';
           return {
             id: Number(id),
-            owner: owner && owner.length > 0 ? owner[0].owner.toText() : 'Unknown',
-            metadata: metadata
+            owner:
+              owner && owner.length > 0 ? owner[0].owner.toText() : 'Unknown',
+            metadata: normalizeTokenMetadata(tokenMetadata),
+            frozen: !!frozen,
+            frozenReason: metaTextFromList(tokenMetadata, 'frozen_reason'),
+            authority,
+            geo: extractGeoFromMetadata(normalizeTokenMetadata(tokenMetadata)),
           };
-        })
+        }),
       );
-      
-      // Load transactions
-      const txs = await backend.get_transactions(0n, 10n);
-      transactions = txs.map(tx => ({
+
+      tokens = await Promise.all(
+        tokens.map(async (token) => {
+          if (!hasGeoMetadata(token.metadata)) return token;
+          return enrichTokenGeo(token);
+        }),
+      );
+
+      const txs = await actor.get_transactions(0n, 12n);
+      transactions = (txs || []).map((tx) => ({
         id: Number(tx.id),
         kind: tx.kind,
         tokenId: Number(tx.token_id),
-        from: tx.from_principal || '-',
-        to: tx.to_principal || '-',
-        timestamp: tx.timestamp
+        from: tx.from_principal || '—',
+        to: tx.to_principal || '—',
+        timestamp: tx.timestamp,
       }));
-      
     } catch (e) {
-      console.error('Failed to load data:', e);
-      error = e.message || 'Failed to load data';
+      console.error('Failed to load registry data:', e);
+      error = e.message || 'Failed to load registry data';
     } finally {
       loading = false;
     }
   }
 
   async function handleMint() {
-    if (!mintTokenId || !mintOwner) return;
-    
+    if (!canMint) {
+      actionError = 'Only authorized minters can mint new assets.';
+      return;
+    }
+    minting = true;
+    actionError = '';
+    actionSuccess = '';
     try {
-      minting = true;
-      mintSuccess = null;
-      mintError = null;
-      
-      const metadata = mintName 
-        ? [[['name', { Text: mintName }]]]
-        : [];
-      
-      const result = await backend.mint({
-        token_id: BigInt(mintTokenId),
+      const actor = await backend();
+      const ownerPrincipal = mintOwner?.trim() || viewer;
+      const metadataEntries = [];
+      if (mintName.trim()) metadataEntries.push(['name', { Text: mintName.trim() }]);
+      if (mintAssetType.trim()) {
+        metadataEntries.push(['asset_type', { Text: mintAssetType.trim() }]);
+      }
+
+      const result = await actor.mint({
+        token_id: [],
         owner: {
-          owner: Principal.fromText(mintOwner),
-          subaccount: []
+          owner: Principal.fromText(ownerPrincipal),
+          subaccount: [],
         },
-        metadata: metadata.length > 0 ? [metadata[0]] : []
+        metadata: metadataEntries.length ? [metadataEntries] : [],
       });
-      
+
       if ('Ok' in result) {
-        mintSuccess = `NFT #${mintTokenId} minted successfully!`;
-        mintTokenId = '';
+        actionSuccess = `Asset #${Number(result.Ok)} minted successfully.`;
         mintOwner = '';
         mintName = '';
+        mintAssetType = '';
         await loadData();
       } else {
-        mintError = result.Err?.message || 'Mint failed';
+        actionError = parseAuthorityError(result) || 'Mint failed.';
       }
     } catch (e) {
-      console.error('Mint failed:', e);
-      mintError = e.message || 'Mint failed';
+      actionError = e.message || 'Mint failed.';
     } finally {
       minting = false;
     }
   }
 
-  function truncateAddress(addr) {
-    if (!addr || addr.length <= 16) return addr;
-    return addr.slice(0, 8) + '...' + addr.slice(-6);
-  }
-
-  function getTokenName(token) {
-    if (!token.metadata || token.metadata.length === 0) return `NFT #${token.id}`;
-    const nameMeta = token.metadata.find(m => m[0] === 'name');
-    if (nameMeta && nameMeta[1] && 'Text' in nameMeta[1]) {
-      return nameMeta[1].Text;
-    }
-    return `NFT #${token.id}`;
+  function openToken(token) {
+    window.location.href = `/t/${token.id}`;
   }
 
   function formatTime(timestamp) {
-    if (!timestamp) return '-';
+    if (!timestamp) return '—';
     try {
-      const date = new Date(Number(timestamp) / 1_000_000);
-      return date.toLocaleString();
+      return new Date(Number(timestamp) / 1_000_000).toLocaleString();
     } catch {
-      return '-';
+      return '—';
     }
   }
 </script>
 
-<main>
-  <div class="dashboard">
-    <div class="dashboard-header">
-      <h1>{collectionName || 'NFT Collection'}</h1>
-      <span class="badge">ICRC-7</span>
-      <span class="badge">ICRC-37</span>
+<main class="page">
+  <div class="page-head">
+    <h1>{collectionName || 'Registry Collection'}</h1>
+    <div class="badge-row">
+      <span class="badge badge-muted">ICRC-7</span>
+      <span class="badge badge-muted">ICRC-37</span>
       {#if testMode}
-        <span class="badge test">TEST MODE</span>
+        <span class="badge badge-warning">Test mode</span>
+      {/if}
+      {#if canMint}
+        <span class="badge">Authorized minter</span>
       {/if}
     </div>
+  </div>
 
-    {#if loading}
-      <div class="loading">Loading collection data...</div>
-    {:else if error}
-      <div class="error">{error}</div>
-    {:else}
-      <!-- Stats Grid -->
-      <div class="stats-grid">
-        <div class="stat-card">
-          <div class="stat-label">Collection</div>
-          <div class="stat-value">{collectionSymbol}</div>
+  {#if collectionDescription}
+    <p class="card-note">{collectionDescription}</p>
+  {:else}
+    <p class="card-note">
+      Shared registry for tokenized assets — land parcels, licenses, certificates, or any
+      other uniquely identifiable asset represented as an ICRC-7 NFT.
+    </p>
+  {/if}
+
+  {#if loading}
+    <div class="loading">Loading registry…</div>
+  {:else if error}
+    <div class="error-box">{error}</div>
+  {:else}
+    <div class="stats-grid">
+      <div class="stat-card">
+        <div class="stat-label">Symbol</div>
+        <div class="stat-value">{collectionSymbol || '—'}</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-label">Total supply</div>
+        <div class="stat-value">{totalSupply}</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-label">Supply cap</div>
+        <div class="stat-value">{supplyCap ?? '∞'}</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-label">Displayed</div>
+        <div class="stat-value">{tokens.length}</div>
+      </div>
+    </div>
+
+    <div class="layout-grid">
+      <div>
+        <div class="card">
+          <h2>Registered assets</h2>
+          {#if tokens.length === 0}
+            <div class="no-data">No assets registered yet.</div>
+          {:else}
+            <div class="nft-grid">
+              {#each tokens as token}
+                <a
+                  class="nft-card"
+                  class:frozen={token.frozen}
+                  href="/t/{token.id}"
+                >
+                  <div class="nft-visual">
+                    {#if token.geo?.h3Indexes?.length || (token.geo?.lat != null && token.geo?.lng != null)}
+                      <AssetGeoMap geo={token.geo} compact={true} />
+                    {:else}
+                      ◆
+                    {/if}
+                  </div>
+                  <div class="nft-body">
+                    <div class="nft-title">{tokenDisplayName(token)}</div>
+                    <div class="nft-subtitle">{tokenSubtitle(token)}</div>
+                    <div class="nft-owner">Owner {truncate(token.owner)}</div>
+                    <div class="nft-badges">
+                      {#if token.frozen}
+                        <span class="badge badge-danger">Frozen</span>
+                      {/if}
+                      {#if token.owner === viewer}
+                        <span class="badge badge-muted">Yours</span>
+                      {/if}
+                      {#if token.authority === viewer}
+                        <span class="badge">Authority</span>
+                      {/if}
+                    </div>
+                  </div>
+                </a>
+              {/each}
+            </div>
+          {/if}
         </div>
-        <div class="stat-card">
-          <div class="stat-label">Total Supply</div>
-          <div class="stat-value supply">{totalSupply}</div>
-        </div>
-        <div class="stat-card">
-          <div class="stat-label">Supply Cap</div>
-          <div class="stat-value">{supplyCap !== null ? supplyCap : '∞'}</div>
-        </div>
-        <div class="stat-card">
-          <div class="stat-label">Displayed</div>
-          <div class="stat-value">{tokens.length}</div>
+
+        <div class="card">
+          <h2>Recent registry events</h2>
+          {#if transactions.length === 0}
+            <div class="no-data">No events recorded yet.</div>
+          {:else}
+            <table class="tx-table">
+              <thead>
+                <tr>
+                  <th>ID</th>
+                  <th>Kind</th>
+                  <th>Asset</th>
+                  <th>From</th>
+                  <th>To</th>
+                  <th>Time</th>
+                </tr>
+              </thead>
+              <tbody>
+                {#each transactions as tx}
+                  <tr>
+                    <td>{tx.id}</td>
+                    <td><span class="tx-kind">{tx.kind}</span></td>
+                    <td>#{tx.tokenId}</td>
+                    <td>{truncate(tx.from)}</td>
+                    <td>{truncate(tx.to)}</td>
+                    <td>{formatTime(tx.timestamp)}</td>
+                  </tr>
+                {/each}
+              </tbody>
+            </table>
+          {/if}
         </div>
       </div>
 
-      <!-- Mint Card (Test Mode Only) -->
-      {#if testMode}
-        <div class="card">
-          <h2>🎨 Mint New NFT</h2>
-          <div class="mint-form">
-            <div class="form-row">
-              <div class="form-group">
-                <label for="tokenId">Token ID</label>
-                <input 
-                  id="tokenId"
-                  type="number" 
-                  bind:value={mintTokenId}
-                  placeholder="1"
-                  disabled={minting}
-                />
-              </div>
-              <div class="form-group">
-                <label for="owner">Owner Principal</label>
-                <input 
-                  id="owner"
-                  type="text" 
+      <aside>
+        {#if !$isAuthenticated}
+          <div class="card">
+            <h2>Sign in required</h2>
+            <p class="hint">
+              Connect with Internet Identity to transfer assets or perform registry
+              authority actions. Minting, forced transfer, freeze, and authority handover
+              are restricted to authorized principals enforced on-chain.
+            </p>
+          </div>
+        {:else if canMint}
+          <div class="card">
+            <h2>Mint asset</h2>
+            <p class="hint">
+              Your principal is an authorized minter. Token IDs are assigned sequentially
+              by the registry.
+            </p>
+            <div class="form-grid">
+              <div>
+                <label for="mintOwner">Owner principal</label>
+                <input
+                  id="mintOwner"
                   bind:value={mintOwner}
-                  placeholder="aaaaa-aa"
+                  placeholder={viewer}
                   disabled={minting}
                 />
               </div>
-              <div class="form-group">
-                <label for="name">Name (optional)</label>
-                <input 
-                  id="name"
-                  type="text" 
-                  bind:value={mintName}
-                  placeholder="My NFT"
-                  disabled={minting}
-                />
+              <div>
+                <label for="mintName">Display name</label>
+                <input id="mintName" bind:value={mintName} placeholder="Certificate #42" disabled={minting} />
+              </div>
+              <div>
+                <label for="mintAssetType">Asset type</label>
+                <input id="mintAssetType" bind:value={mintAssetType} placeholder="land, license, deed…" disabled={minting} />
               </div>
             </div>
-            <button 
-              class="mint-button" 
-              on:click={handleMint}
-              disabled={minting || !mintTokenId || !mintOwner}
-            >
-              {minting ? 'Minting...' : 'Mint NFT'}
-            </button>
-            {#if mintSuccess}
-              <div class="mint-success">{mintSuccess}</div>
-            {/if}
-            {#if mintError}
-              <div class="mint-error">{mintError}</div>
-            {/if}
+            <div class="btn-row">
+              <button class="btn btn-primary" disabled={minting} on:click={handleMint}>
+                {minting ? 'Minting…' : 'Mint asset'}
+              </button>
+            </div>
           </div>
-        </div>
-      {/if}
-
-      <!-- NFT Grid -->
-      <div class="card">
-        <h2>🖼️ NFT Collection</h2>
-        {#if tokens.length === 0}
-          <div class="no-data">No NFTs minted yet</div>
         {:else}
-          <div class="nft-grid">
-            {#each tokens as token}
-              <div class="nft-card" on:click={() => selectedToken = token}>
-                <div class="nft-image">
-                  🎨
-                </div>
-                <div class="nft-info">
-                  <div class="nft-id">#{token.id}</div>
-                  <div class="nft-name">{getTokenName(token)}</div>
-                  <div class="nft-owner">{truncateAddress(token.owner)}</div>
-                </div>
-              </div>
-            {/each}
+          <div class="card">
+            <h2>Registry permissions</h2>
+            <p class="hint">
+              You can transfer assets you own. Minting and authority operations require an
+              authorized minter principal configured on the registry canister.
+            </p>
           </div>
         {/if}
-      </div>
 
-      <!-- Recent Transactions -->
-      <div class="card">
-        <h2>📜 Recent Transactions</h2>
-        {#if transactions.length === 0}
-          <div class="no-data">No transactions yet</div>
-        {:else}
-          <table class="tx-table">
-            <thead>
-              <tr>
-                <th>ID</th>
-                <th>Type</th>
-                <th>Token</th>
-                <th>From</th>
-                <th>To</th>
-                <th>Time</th>
-              </tr>
-            </thead>
-            <tbody>
-              {#each transactions as tx}
-                <tr>
-                  <td>{tx.id}</td>
-                  <td><span class="tx-badge {tx.kind}">{tx.kind}</span></td>
-                  <td>#{tx.tokenId}</td>
-                  <td class="address">{truncateAddress(tx.from)}</td>
-                  <td class="address">{truncateAddress(tx.to)}</td>
-                  <td>{formatTime(tx.timestamp)}</td>
-                </tr>
+        <div class="card">
+          <h3>Authorized minters</h3>
+          {#if authorizedMinters.length === 0}
+            <p class="hint">No authorized minters configured.</p>
+          {:else}
+            <div class="detail-grid">
+              {#each authorizedMinters as minter}
+                <code>{minter}</code>
               {/each}
-            </tbody>
-          </table>
-        {/if}
-      </div>
-    {/if}
-  </div>
-</main>
-
-<!-- Token Detail Modal -->
-{#if selectedToken}
-  <div class="modal-overlay" on:click={() => selectedToken = null}>
-    <div class="modal" on:click|stopPropagation>
-      <div class="modal-header">
-        <h2>NFT #{selectedToken.id}</h2>
-        <button class="modal-close" on:click={() => selectedToken = null}>×</button>
-      </div>
-      <div class="nft-image" style="height: 200px; border-radius: 8px; margin-bottom: 20px;">
-        🎨
-      </div>
-      <div class="detail-row">
-        <span class="detail-label">Token ID</span>
-        <span class="detail-value">{selectedToken.id}</span>
-      </div>
-      <div class="detail-row">
-        <span class="detail-label">Name</span>
-        <span class="detail-value">{getTokenName(selectedToken)}</span>
-      </div>
-      <div class="detail-row">
-        <span class="detail-label">Owner</span>
-        <span class="detail-value">{selectedToken.owner}</span>
-      </div>
+            </div>
+          {/if}
+        </div>
+      </aside>
     </div>
-  </div>
-{/if}
-
-<style>
-  .badge.test {
-    background: #f59e0b;
-  }
-</style>
+  {/if}
+</main>

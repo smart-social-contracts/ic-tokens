@@ -30,6 +30,7 @@ from basilisk import (
     Vec,
     void,
     ic,
+    text,
 )
 from ic_python_db import Database, Entity, Integer, String
 from ic_python_logging import get_logger
@@ -230,7 +231,7 @@ class InitArg(Record):
 
 
 class MintArg(Record):
-    token_id: nat
+    token_id: Opt[nat]
     owner: Account
     metadata: Opt[Vec[Tuple[str, MetadataValue]]]
 
@@ -245,6 +246,38 @@ class MintError(Variant, total=False):
 class MintResult(Variant, total=False):
     Ok: nat
     Err: MintError
+
+
+# Authority-controlled operations (ERC-3643/ERC-6147-style semantics).
+# The registry authority (an authorized minter matching the token's authority
+# metadata, or a canister controller) can force-transfer or freeze tokens.
+class ForceTransferArg(Record):
+    token_id: nat
+    to: Account
+    memo: Opt[str]
+
+
+class FreezeArg(Record):
+    token_id: nat
+    reason: Opt[str]
+
+
+class TransferAuthorityArg(Record):
+    token_id: nat
+    new_authority: Principal
+    memo: Opt[str]
+
+
+class AuthorityError(Variant, total=False):
+    NonExistingTokenId: null
+    Unauthorized: null
+    InvalidRecipient: null
+    GenericError: "GenericError"
+
+
+class AuthorityResult(Variant, total=False):
+    Ok: nat
+    Err: AuthorityError
 
 
 # Candid Record types for query returns
@@ -278,6 +311,12 @@ class NFTToken(Entity):
     owner_principal = String()  # Owner's principal
     owner_subaccount = String(max_length=64, default="")  # Hex-encoded subaccount
     metadata_json = String(max_length=4096, default="{}")  # JSON-encoded metadata
+    # Registry authority: the principal that minted the token (e.g. a realm
+    # canister). Only this principal (or a canister controller) may
+    # force-transfer or freeze the token.
+    authority_principal = String(default="")
+    frozen = Integer(default=0)  # 1 = transfers blocked
+    frozen_reason = String(max_length=512, default="")
 
 
 class NFTCollection(Entity):
@@ -289,8 +328,10 @@ class NFTCollection(Entity):
     description = String(max_length=1024, default="")
     supply_cap = Integer(default=0)  # 0 means no cap
     total_supply = Integer(default=0)
+    next_token_id = Integer(default=1)  # Sequential ID for auto-assigned mints
     tx_count = Integer(default=0)  # Transaction counter for block indices
     test_mode = Integer(default=0)  # 1 = test mode enabled
+    authorized_minters = String(max_length=8192, default="")  # comma-separated principals
 
 
 class NFTApproval(Entity):
@@ -311,7 +352,9 @@ class NFTTransactionLog(Entity):
     """Transaction history for ICRC-3 compatibility."""
     __alias__ = "id"
     id = Integer()  # Block index
-    kind = String(max_length=16)  # "mint", "transfer", "approve", "revoke"
+    # "mint", "transfer", "approve", "approve_collection", "revoke",
+    # "revoke_collection", "transfer_from", "force_transfer", "freeze", "unfreeze"
+    kind = String(max_length=32)
     timestamp = Integer()  # Nanoseconds since epoch
     token_id = Integer()
     from_principal = String(default="")
@@ -356,6 +399,59 @@ def _get_collection() -> NFTCollection:
     if collection:
         return collection
     raise Exception("Collection not initialized")
+
+
+def _ensure_next_token_id(collection: NFTCollection) -> None:
+    """Initialize next_token_id for collections that predate the counter.
+
+    Existing collections may have next_token_id defaulting to 1. If the
+    collection already has tokens, bump the counter to one past the highest
+    existing token ID so auto-assigned IDs never collide with existing ones.
+    """
+    if collection.next_token_id <= 1 and collection.total_supply > 0:
+        max_id = max((int(t.id) for t in NFTToken.instances()), default=0)
+        collection.next_token_id = max(max_id + 1, collection.next_token_id)
+
+
+def _authorized_minter_set() -> set:
+    collection = _get_collection()
+    raw = getattr(collection, "authorized_minters", "") or ""
+    return {p.strip() for p in raw.split(",") if p.strip()}
+
+
+def _is_authorized_minter(principal_str: str) -> bool:
+    return principal_str in _authorized_minter_set()
+
+
+def _can_mint(caller) -> bool:
+    collection = _get_collection()
+    if collection.test_mode == 1:
+        return True
+    caller_str = caller.to_str()
+    if _is_authorized_minter(caller_str):
+        return True
+    return False
+
+
+def _is_token_authority(caller, token) -> bool:
+    """Check whether the caller is the registry authority for the token.
+
+    The authority is the principal recorded at mint time (e.g. the realm
+    canister that minted it). Canister controllers can always act, which
+    covers tokens minted before the authority field existed and provides
+    an escape hatch for platform-level intervention.
+    """
+    if ic.is_controller(caller):
+        return True
+    caller_str = caller.to_str()
+    authority = getattr(token, "authority_principal", "") or ""
+    if authority and caller_str == authority and _is_authorized_minter(caller_str):
+        return True
+    return False
+
+
+def _is_token_frozen(token) -> bool:
+    return bool(getattr(token, "frozen", 0))
 
 
 def _get_token(token_id: nat) -> Opt[NFTToken]:
@@ -458,6 +554,7 @@ def init_(args: InitArg) -> void:
         description=args.get("description") or "",
         supply_cap=args.get("supply_cap") or 0,
         total_supply=0,
+        next_token_id=1,
         tx_count=0,
         test_mode=1 if args.get("test") else 0
     )
@@ -535,6 +632,11 @@ def icrc7_token_metadata(token_id: nat) -> Opt[Vec[Tuple[str, MetadataValue]]]:
             metadata.append((key, MetadataValue(Text=value)))
         elif isinstance(value, int):
             metadata.append((key, MetadataValue(Nat=value)))
+    
+    if _is_token_frozen(token):
+        metadata.append(("frozen", MetadataValue(Nat=1)))
+        if token.frozen_reason:
+            metadata.append(("frozen_reason", MetadataValue(Text=token.frozen_reason)))
     
     return metadata
 
@@ -625,6 +727,13 @@ def icrc7_transfer(args: Vec[TransferArg]) -> Vec[Opt[TransferResult]]:
         
         if not token:
             results.append(TransferResult(Err=TransferError(NonExistingTokenId=null)))
+            continue
+        
+        # Frozen tokens cannot be transferred by holders
+        if _is_token_frozen(token):
+            results.append(TransferResult(Err=TransferError(
+                GenericError=GenericError(error_code=423, message="Token is frozen by the registry authority")
+            )))
             continue
         
         # Build caller account
@@ -986,6 +1095,13 @@ def icrc37_transfer_from(args: Vec[TransferFromArg]) -> Vec[Opt[TransferFromResu
             results.append(TransferFromResult(Err=TransferFromError(NonExistingTokenId=null)))
             continue
         
+        # Frozen tokens cannot be transferred via approvals
+        if _is_token_frozen(token):
+            results.append(TransferFromResult(Err=TransferFromError(
+                GenericError=GenericError(error_code=423, message="Token is frozen by the registry authority")
+            )))
+            continue
+        
         from_account = arg["from_"]
         
         # Check that from_account is the actual owner
@@ -1049,25 +1165,35 @@ def icrc37_transfer_from(args: Vec[TransferFromArg]) -> Vec[Opt[TransferFromResu
 
 @update
 def mint(arg: MintArg) -> MintResult:
-    """Mint a new NFT. Only allowed in test mode or by collection owner."""
+    """Mint a new NFT. Allowed in test mode or for authorized minter principals."""
     caller = ic.caller()
     collection = _get_collection()
-    
-    # Check authorization (test mode allows anyone to mint)
-    if collection.test_mode != 1:
-        # In production, only the canister controller can mint
-        # For now, we'll allow anyone in test mode
+
+    if not _can_mint(caller):
         return MintResult(Err=MintError(Unauthorized=null))
     
     # Check supply cap
     if collection.supply_cap > 0 and collection.total_supply >= collection.supply_cap:
         return MintResult(Err=MintError(SupplyCapReached=null))
     
+    # Determine the token ID. If the caller did not specify one, auto-assign
+    # the next sequential ID from the collection counter.
+    requested_token_id = arg.get("token_id")
+    if requested_token_id is None:
+        _ensure_next_token_id(collection)
+        token_id = collection.next_token_id
+        collection.next_token_id = token_id + 1
+    else:
+        token_id = int(requested_token_id)
+        # Keep the counter ahead of any explicitly chosen ID.
+        if collection.next_token_id <= token_id:
+            collection.next_token_id = token_id + 1
+
     # Check token ID doesn't exist
-    existing = _get_token(arg["token_id"])
+    existing = _get_token(token_id)
     if existing:
         return MintResult(Err=MintError(TokenIdAlreadyExists=null))
-    
+
     # Convert metadata to JSON
     import json
     metadata_dict = {}
@@ -1079,29 +1205,198 @@ def mint(arg: MintArg) -> MintResult:
                 metadata_dict[key] = value["Nat"]
             elif "Int" in value:
                 metadata_dict[key] = value["Int"]
-    
-    # Create token
+
+    # Create token. The minting caller becomes the token's registry
+    # authority (may force-transfer/freeze it later).
     owner = arg["owner"]
     token = NFTToken(
-        id=int(arg["token_id"]),
+        id=token_id,
         owner_principal=owner["owner"].to_str(),
         owner_subaccount=_subaccount_to_hex(owner.get("subaccount")),
-        metadata_json=json.dumps(metadata_dict)
+        metadata_json=json.dumps(metadata_dict),
+        authority_principal=caller.to_str(),
+        frozen=0
     )
-    
+
     # Update supply
     collection.total_supply += 1
-    
+
     # Log transaction
     tx_id = _log_transaction(
         kind="mint",
-        token_id=int(arg["token_id"]),
+        token_id=token_id,
         to_principal=owner["owner"].to_str(),
         to_subaccount=_subaccount_to_hex(owner.get("subaccount"))
     )
-    
-    logger.info(f"Mint: token {arg['token_id']} to {owner['owner'].to_str()}")
-    return MintResult(Ok=tx_id)
+
+    logger.info(f"Mint: token {token_id} to {owner['owner'].to_str()}")
+    return MintResult(Ok=token_id)
+
+
+# =============================================================================
+# Authority-Controlled Operations (registry override)
+# =============================================================================
+
+@update
+def force_transfer(arg: ForceTransferArg) -> AuthorityResult:
+    """Forcefully transfer a token to a new owner, bypassing holder consent.
+
+    Only the token's registry authority (the principal that minted it, still
+    an authorized minter) or a canister controller may call this. Works on
+    frozen tokens. Clears existing token-level approvals. Intended for
+    judicial procedures, governance decisions, and key recovery.
+    """
+    caller = ic.caller()
+    token = _get_token(arg["token_id"])
+    if not token:
+        return AuthorityResult(Err=AuthorityError(NonExistingTokenId=null))
+
+    if not _is_token_authority(caller, token):
+        return AuthorityResult(Err=AuthorityError(Unauthorized=null))
+
+    to_account = arg["to"]
+    if _is_owner(token, to_account):
+        return AuthorityResult(Err=AuthorityError(InvalidRecipient=null))
+
+    old_owner = token.owner_principal
+    old_subaccount = token.owner_subaccount
+
+    token.owner_principal = to_account["owner"].to_str()
+    token.owner_subaccount = _subaccount_to_hex(to_account.get("subaccount"))
+
+    # Clear token-level approvals granted by the previous owner
+    for approval in NFTApproval.instances():
+        if approval.approval_type == "token" and approval.token_id == int(arg["token_id"]):
+            approval.delete()
+
+    memo = arg.get("memo") or ""
+    tx_id = _log_transaction(
+        kind="force_transfer",
+        token_id=int(arg["token_id"]),
+        from_principal=old_owner,
+        from_subaccount=old_subaccount,
+        to_principal=token.owner_principal,
+        to_subaccount=token.owner_subaccount,
+        spender_principal=caller.to_str(),
+        memo=memo[:512]
+    )
+
+    logger.info(
+        f"Force transfer: token {arg['token_id']} from {old_owner} to "
+        f"{token.owner_principal} by authority {caller.to_str()}"
+    )
+    return AuthorityResult(Ok=tx_id)
+
+
+@update
+def freeze_token(arg: FreezeArg) -> AuthorityResult:
+    """Freeze a token: holders cannot transfer it until unfrozen.
+
+    Only the token's registry authority or a canister controller may call
+    this. force_transfer still works on frozen tokens.
+    """
+    caller = ic.caller()
+    token = _get_token(arg["token_id"])
+    if not token:
+        return AuthorityResult(Err=AuthorityError(NonExistingTokenId=null))
+
+    if not _is_token_authority(caller, token):
+        return AuthorityResult(Err=AuthorityError(Unauthorized=null))
+
+    reason = arg.get("reason") or ""
+    token.frozen = 1
+    token.frozen_reason = reason[:512]
+
+    tx_id = _log_transaction(
+        kind="freeze",
+        token_id=int(arg["token_id"]),
+        spender_principal=caller.to_str(),
+        memo=reason[:512]
+    )
+    logger.info(f"Freeze: token {arg['token_id']} by authority {caller.to_str()}")
+    return AuthorityResult(Ok=tx_id)
+
+
+@update
+def unfreeze_token(token_id: nat) -> AuthorityResult:
+    """Unfreeze a token, restoring normal holder transfers."""
+    caller = ic.caller()
+    token = _get_token(token_id)
+    if not token:
+        return AuthorityResult(Err=AuthorityError(NonExistingTokenId=null))
+
+    if not _is_token_authority(caller, token):
+        return AuthorityResult(Err=AuthorityError(Unauthorized=null))
+
+    token.frozen = 0
+    token.frozen_reason = ""
+
+    tx_id = _log_transaction(
+        kind="unfreeze",
+        token_id=int(token_id),
+        spender_principal=caller.to_str()
+    )
+    logger.info(f"Unfreeze: token {token_id} by authority {caller.to_str()}")
+    return AuthorityResult(Ok=tx_id)
+
+
+@update
+def transfer_authority(arg: TransferAuthorityArg) -> AuthorityResult:
+    """Hand over the registry authority of a token to another principal.
+
+    ERC-6147-style guard change: only the token's current authority (still an
+    authorized minter) or a canister controller may call this. The new
+    authority gains force_transfer/freeze/unfreeze rights over the token
+    (provided it is, or becomes, an authorized minter).
+    """
+    caller = ic.caller()
+    token = _get_token(arg["token_id"])
+    if not token:
+        return AuthorityResult(Err=AuthorityError(NonExistingTokenId=null))
+
+    if not _is_token_authority(caller, token):
+        return AuthorityResult(Err=AuthorityError(Unauthorized=null))
+
+    old_authority = getattr(token, "authority_principal", "") or ""
+    new_authority = arg["new_authority"].to_str()
+    if new_authority == old_authority:
+        return AuthorityResult(Err=AuthorityError(InvalidRecipient=null))
+
+    token.authority_principal = new_authority
+
+    memo = arg.get("memo") or ""
+    tx_id = _log_transaction(
+        kind="transfer_authority",
+        token_id=int(arg["token_id"]),
+        from_principal=old_authority,
+        to_principal=new_authority,
+        spender_principal=caller.to_str(),
+        memo=memo[:512]
+    )
+    logger.info(
+        f"Authority transfer: token {arg['token_id']} authority "
+        f"{old_authority} -> {new_authority} by {caller.to_str()}"
+    )
+    return AuthorityResult(Ok=tx_id)
+
+
+@query
+def is_token_frozen(token_id: nat) -> bool:
+    """Check whether a token is currently frozen."""
+    token = _get_token(token_id)
+    if not token:
+        return False
+    return _is_token_frozen(token)
+
+
+@query
+def get_token_authority(token_id: nat) -> Opt[text]:
+    """Return the registry authority principal for a token, if any."""
+    token = _get_token(token_id)
+    if not token:
+        return None
+    authority = getattr(token, "authority_principal", "") or ""
+    return authority if authority else None
 
 
 @query
@@ -1143,3 +1438,57 @@ def is_test_mode() -> bool:
     if collection:
         return collection.test_mode == 1
     return False
+
+
+@query
+def list_authorized_minters() -> Vec[text]:
+    """Return principals authorized to mint when not in test mode."""
+    try:
+        return sorted(_authorized_minter_set())
+    except Exception:
+        return []
+
+
+@update
+def add_authorized_minter(principal: text) -> text:
+    """Add a principal allowed to mint (controller-only)."""
+    import json
+
+    caller = ic.caller()
+    if not ic.is_controller(caller):
+        return json.dumps({"success": False, "error": "Only canister controllers may authorize minters"})
+
+    principal = (principal or "").strip()
+    if not principal:
+        return json.dumps({"success": False, "error": "principal is required"})
+
+    collection = _get_collection()
+    current = _authorized_minter_set()
+    if principal in current:
+        return json.dumps({"success": True, "message": "Principal already authorized", "minters": sorted(current)})
+
+    current.add(principal)
+    collection.authorized_minters = ",".join(sorted(current))
+    logger.info(f"Authorized minter added: {principal}")
+    return json.dumps({"success": True, "minters": sorted(current)})
+
+
+@update
+def remove_authorized_minter(principal: text) -> text:
+    """Remove a mint-authorized principal (controller-only)."""
+    import json
+
+    caller = ic.caller()
+    if not ic.is_controller(caller):
+        return json.dumps({"success": False, "error": "Only canister controllers may revoke minters"})
+
+    principal = (principal or "").strip()
+    collection = _get_collection()
+    current = _authorized_minter_set()
+    if principal not in current:
+        return json.dumps({"success": False, "error": "Principal not in authorized minters list"})
+
+    current.discard(principal)
+    collection.authorized_minters = ",".join(sorted(current))
+    logger.info(f"Authorized minter removed: {principal}")
+    return json.dumps({"success": True, "minters": sorted(current)})
