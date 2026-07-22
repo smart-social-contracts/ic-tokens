@@ -7,15 +7,15 @@
     metaText,
     normalizeTokenMetadata,
     tokenDisplayName,
-    tokenSubtitle,
     truncate,
   } from '$lib/metadata.js';
-  import AssetGeoMap from '$lib/components/AssetGeoMap.svelte';
   import {
     extractGeoFromMetadata,
     hasGeoMetadata,
     resolveTokenGeo,
   } from '$lib/geo.js';
+  import { filterTokens, tokenAssetType, tokenRealm, uniqueFilterOptions } from '$lib/filters.js';
+  import NftCard from '$lib/components/NftCard.svelte';
 
   let loading = true;
   let error = null;
@@ -24,14 +24,21 @@
 
   let collectionName = '';
   let collectionSymbol = '';
-  let collectionDescription = '';
   let totalSupply = 0;
   let supplyCap = null;
   let testMode = false;
   let authorizedMinters = [];
 
   let tokens = [];
-  let transactions = [];
+  let visibleCount = 12;
+
+  let search = '';
+  let filterType = '';
+  let filterRealm = '';
+  let filterAuthority = '';
+  let filterOwner = '';
+  let showFrozen = false;
+  let mineOnly = false;
 
   let mintOwner = '';
   let mintName = '';
@@ -40,6 +47,26 @@
 
   $: viewer = $principal;
   $: canMint = $isAuthenticated && authorizedMinters.includes(viewer);
+
+  $: assetTypes = uniqueFilterOptions(tokens, tokenAssetType);
+  $: realms = uniqueFilterOptions(tokens, tokenRealm);
+  $: authorities = uniqueFilterOptions(tokens, (t) => t.authority);
+  $: owners = uniqueFilterOptions(tokens, (t) => t.owner);
+
+  $: filters = {
+    search,
+    type: filterType,
+    realm: filterRealm,
+    authority: filterAuthority,
+    owner: filterOwner,
+    frozen: showFrozen,
+    mineOnly,
+    viewer,
+  };
+
+  $: filtered = filterTokens(tokens, filters);
+  $: visible = filtered.slice(0, visibleCount);
+  $: hasMore = visibleCount < filtered.length;
 
   onMount(async () => {
     await loadData();
@@ -59,18 +86,15 @@
     return 'Operation failed.';
   }
 
-  function parseTransferError(result) {
-    if (!result || 'Ok' in result) return null;
-    const err = result.Err || {};
-    if ('Unauthorized' in err) return 'Only the owner can transfer this asset.';
-    if ('NonExistingTokenId' in err) return 'Token does not exist.';
-    if ('InvalidRecipient' in err) return 'Invalid recipient.';
-    if ('GenericError' in err) return err.GenericError?.message || 'Transfer failed.';
-    return 'Transfer failed.';
-  }
-
-  function metaTextFromList(metadata, key) {
-    return metaText(metadata, key);
+  function resetFilters() {
+    search = '';
+    filterType = '';
+    filterRealm = '';
+    filterAuthority = '';
+    filterOwner = '';
+    showFrozen = false;
+    mineOnly = false;
+    visibleCount = 12;
   }
 
   async function enrichTokenGeo(token) {
@@ -85,14 +109,13 @@
       actionError = '';
       const actor = await backend();
 
-      const [name, symbol, supply, cap, test, minters, metadata] = await Promise.all([
+      const [name, symbol, supply, cap, test, minters] = await Promise.all([
         actor.icrc7_name(),
         actor.icrc7_symbol(),
         actor.icrc7_total_supply(),
         actor.icrc7_supply_cap(),
         actor.is_test_mode().catch(() => false),
         actor.list_authorized_minters().catch(() => []),
-        actor.icrc7_collection_metadata().catch(() => []),
       ]);
 
       collectionName = name;
@@ -101,8 +124,6 @@
       supplyCap = cap && cap.length > 0 ? Number(cap[0]) : null;
       testMode = !!test;
       authorizedMinters = minters || [];
-      collectionDescription =
-        metadata.find((entry) => entry[0] === 'icrc7:description')?.[1]?.Text || '';
 
       const tokenIds = await actor.icrc7_tokens([], []);
       tokens = await Promise.all(
@@ -122,7 +143,7 @@
               owner && owner.length > 0 ? owner[0].owner.toText() : 'Unknown',
             metadata: normalizeTokenMetadata(tokenMetadata),
             frozen: !!frozen,
-            frozenReason: metaTextFromList(tokenMetadata, 'frozen_reason'),
+            frozenReason: metaText(normalizeTokenMetadata(tokenMetadata), 'frozen_reason'),
             authority,
             geo: extractGeoFromMetadata(normalizeTokenMetadata(tokenMetadata)),
           };
@@ -135,16 +156,6 @@
           return enrichTokenGeo(token);
         }),
       );
-
-      const txs = await actor.get_transactions(0n, 12n);
-      transactions = (txs || []).map((tx) => ({
-        id: Number(tx.id),
-        kind: tx.kind,
-        tokenId: Number(tx.token_id),
-        from: tx.from_principal || '—',
-        to: tx.to_principal || '—',
-        timestamp: tx.timestamp,
-      }));
     } catch (e) {
       console.error('Failed to load registry data:', e);
       error = e.message || 'Failed to load registry data';
@@ -195,42 +206,38 @@
     }
   }
 
-  function openToken(token) {
-    window.location.href = `/t/${token.id}`;
-  }
-
-  function formatTime(timestamp) {
-    if (!timestamp) return '—';
-    try {
-      return new Date(Number(timestamp) / 1_000_000).toLocaleString();
-    } catch {
-      return '—';
-    }
+  function loadMore() {
+    visibleCount += 12;
   }
 </script>
 
 <main class="page">
-  <div class="page-head">
-    <h1>{collectionName || 'Registry Collection'}</h1>
-    <div class="badge-row">
-      <span class="badge badge-muted">ICRC-7</span>
-      <span class="badge badge-muted">ICRC-37</span>
-      {#if testMode}
-        <span class="badge badge-warning">Test mode</span>
-      {/if}
-      {#if canMint}
-        <span class="badge">Authorized minter</span>
-      {/if}
+  <div class="hero">
+    <div>
+      <h1>{collectionName || 'Registry'}</h1>
+      <div class="hero-meta">
+        {collectionSymbol || '—'} · {totalSupply} assets
+        {#if supplyCap} / {supplyCap} cap{/if}
+        {#if testMode} · Test mode{/if}
+      </div>
+    </div>
+    <div class="stats-row">
+      <div class="stat-pill">
+        <span class="stat-value">{filtered.length}</span>
+        <span class="stat-label">shown</span>
+      </div>
+      <div class="stat-pill">
+        <span class="stat-value">{totalSupply}</span>
+        <span class="stat-label">total</span>
+      </div>
     </div>
   </div>
 
-  {#if collectionDescription}
-    <p class="card-note">{collectionDescription}</p>
-  {:else}
-    <p class="card-note">
-      Shared registry for tokenized assets — land parcels, licenses, certificates, or any
-      other uniquely identifiable asset represented as an ICRC-7 NFT.
-    </p>
+  {#if actionSuccess}
+    <div class="success-box">{actionSuccess}</div>
+  {/if}
+  {#if actionError}
+    <div class="error-box">{actionError}</div>
   {/if}
 
   {#if loading}
@@ -238,166 +245,108 @@
   {:else if error}
     <div class="error-box">{error}</div>
   {:else}
-    <div class="stats-grid">
-      <div class="stat-card">
-        <div class="stat-label">Symbol</div>
-        <div class="stat-value">{collectionSymbol || '—'}</div>
-      </div>
-      <div class="stat-card">
-        <div class="stat-label">Total supply</div>
-        <div class="stat-value">{totalSupply}</div>
-      </div>
-      <div class="stat-card">
-        <div class="stat-label">Supply cap</div>
-        <div class="stat-value">{supplyCap ?? '∞'}</div>
-      </div>
-      <div class="stat-card">
-        <div class="stat-label">Displayed</div>
-        <div class="stat-value">{tokens.length}</div>
-      </div>
+    <div class="filter-bar">
+      <input
+        type="text"
+        placeholder="Search assets…"
+        bind:value={search}
+      />
+
+      {#if assetTypes.length}
+        <select bind:value={filterType}>
+          <option value="">All types</option>
+          {#each assetTypes as type}
+            <option value={type}>{type}</option>
+          {/each}
+        </select>
+      {/if}
+
+      {#if realms.length}
+        <select bind:value={filterRealm}>
+          <option value="">All realms</option>
+          {#each realms as realm}
+            <option value={realm}>{truncate(realm)}</option>
+          {/each}
+        </select>
+      {/if}
+
+      {#if authorities.length}
+        <select bind:value={filterAuthority}>
+          <option value="">All authorities</option>
+          {#each authorities as authority}
+            <option value={authority}>{truncate(authority)}</option>
+          {/each}
+        </select>
+      {/if}
+
+      {#if $isAuthenticated}
+        <button
+          class="filter-pill"
+          class:active={mineOnly}
+          on:click={() => (mineOnly = !mineOnly)}
+        >
+          Mine only
+        </button>
+      {/if}
+
+      <button
+        class="filter-pill"
+        class:active={showFrozen}
+        on:click={() => (showFrozen = !showFrozen)}
+      >
+        Frozen
+      </button>
+
+      <button class="filter-pill" on:click={resetFilters}>Reset</button>
     </div>
 
-    <div class="layout-grid">
-      <div>
-        <div class="card">
-          <h2>Registered assets</h2>
-          {#if tokens.length === 0}
-            <div class="no-data">No assets registered yet.</div>
-          {:else}
-            <div class="nft-grid">
-              {#each tokens as token}
-                <a
-                  class="nft-card"
-                  class:frozen={token.frozen}
-                  href="/t/{token.id}"
-                >
-                  <div class="nft-visual">
-                    {#if token.geo?.h3Indexes?.length || (token.geo?.lat != null && token.geo?.lng != null)}
-                      <AssetGeoMap geo={token.geo} compact={true} />
-                    {:else}
-                      ◆
-                    {/if}
-                  </div>
-                  <div class="nft-body">
-                    <div class="nft-title">{tokenDisplayName(token)}</div>
-                    <div class="nft-subtitle">{tokenSubtitle(token)}</div>
-                    <div class="nft-owner">Owner {truncate(token.owner)}</div>
-                    <div class="nft-badges">
-                      {#if token.frozen}
-                        <span class="badge badge-danger">Frozen</span>
-                      {/if}
-                      {#if token.owner === viewer}
-                        <span class="badge badge-muted">Yours</span>
-                      {/if}
-                      {#if token.authority === viewer}
-                        <span class="badge">Authority</span>
-                      {/if}
-                    </div>
-                  </div>
-                </a>
-              {/each}
-            </div>
-          {/if}
-        </div>
+    {#if visible.length === 0}
+      <div class="no-data">No assets match the current filters.</div>
+    {:else}
+      <div class="nft-grid">
+        {#each visible as token (token.id)}
+          <NftCard {token} />
+        {/each}
+      </div>
+    {/if}
 
-        <div class="card">
-          <h2>Recent registry events</h2>
-          {#if transactions.length === 0}
-            <div class="no-data">No events recorded yet.</div>
-          {:else}
-            <table class="tx-table">
-              <thead>
-                <tr>
-                  <th>ID</th>
-                  <th>Kind</th>
-                  <th>Asset</th>
-                  <th>From</th>
-                  <th>To</th>
-                  <th>Time</th>
-                </tr>
-              </thead>
-              <tbody>
-                {#each transactions as tx}
-                  <tr>
-                    <td>{tx.id}</td>
-                    <td><span class="tx-kind">{tx.kind}</span></td>
-                    <td>#{tx.tokenId}</td>
-                    <td>{truncate(tx.from)}</td>
-                    <td>{truncate(tx.to)}</td>
-                    <td>{formatTime(tx.timestamp)}</td>
-                  </tr>
-                {/each}
-              </tbody>
-            </table>
-          {/if}
+    {#if hasMore}
+      <div class="load-more">
+        <button class="btn btn-secondary" on:click={loadMore}>Load more</button>
+      </div>
+    {/if}
+
+    {#if $isAuthenticated && canMint}
+      <div class="card" style="margin-top: 32px;">
+        <h2>Mint asset</h2>
+        <div class="form-grid">
+          <div>
+            <label for="mintOwner">Owner</label>
+            <input id="mintOwner" bind:value={mintOwner} placeholder={viewer} disabled={minting} />
+          </div>
+          <div>
+            <label for="mintName">Name</label>
+            <input id="mintName" bind:value={mintName} placeholder="Certificate #42" disabled={minting} />
+          </div>
+          <div>
+            <label for="mintAssetType">Type</label>
+            <input id="mintAssetType" bind:value={mintAssetType} placeholder="land, license, deed…" disabled={minting} />
+          </div>
+        </div>
+        <div class="btn-row">
+          <button class="btn btn-primary" disabled={minting} on:click={handleMint}>
+            {minting ? 'Minting…' : 'Mint asset'}
+          </button>
         </div>
       </div>
-
-      <aside>
-        {#if !$isAuthenticated}
-          <div class="card">
-            <h2>Sign in required</h2>
-            <p class="hint">
-              Connect with Internet Identity to transfer assets or perform registry
-              authority actions. Minting, forced transfer, freeze, and authority handover
-              are restricted to authorized principals enforced on-chain.
-            </p>
-          </div>
-        {:else if canMint}
-          <div class="card">
-            <h2>Mint asset</h2>
-            <p class="hint">
-              Your principal is an authorized minter. Token IDs are assigned sequentially
-              by the registry.
-            </p>
-            <div class="form-grid">
-              <div>
-                <label for="mintOwner">Owner principal</label>
-                <input
-                  id="mintOwner"
-                  bind:value={mintOwner}
-                  placeholder={viewer}
-                  disabled={minting}
-                />
-              </div>
-              <div>
-                <label for="mintName">Display name</label>
-                <input id="mintName" bind:value={mintName} placeholder="Certificate #42" disabled={minting} />
-              </div>
-              <div>
-                <label for="mintAssetType">Asset type</label>
-                <input id="mintAssetType" bind:value={mintAssetType} placeholder="land, license, deed…" disabled={minting} />
-              </div>
-            </div>
-            <div class="btn-row">
-              <button class="btn btn-primary" disabled={minting} on:click={handleMint}>
-                {minting ? 'Minting…' : 'Mint asset'}
-              </button>
-            </div>
-          </div>
-        {:else}
-          <div class="card">
-            <h2>Registry permissions</h2>
-            <p class="hint">
-              You can transfer assets you own. Minting and authority operations require an
-              authorized minter principal configured on the registry canister.
-            </p>
-          </div>
-        {/if}
-
-        <div class="card">
-          <h3>Authorized minters</h3>
-          {#if authorizedMinters.length === 0}
-            <p class="hint">No authorized minters configured.</p>
-          {:else}
-            <div class="detail-grid">
-              {#each authorizedMinters as minter}
-                <code>{minter}</code>
-              {/each}
-            </div>
-          {/if}
-        </div>
-      </aside>
-    </div>
+    {/if}
   {/if}
 </main>
+
+<style>
+  .load-more {
+    display: flex;
+    justify-content: center;
+    margin-top: 28px;
+  }
+</style>

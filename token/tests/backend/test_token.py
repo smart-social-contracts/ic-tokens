@@ -44,7 +44,14 @@ class MockStableBTreeMap(metaclass=SubscriptableMeta):
 
 
 class MockRecord:
-    pass
+    def __init__(self, **kwargs):
+        self.__dict__.update(kwargs)
+
+    def __getitem__(self, key):
+        return getattr(self, key)
+
+    def get(self, key, default=None):
+        return getattr(self, key, default)
 
 
 class MockVariant:
@@ -60,39 +67,41 @@ class MockVariant:
 
 
 # Create mock modules BEFORE any imports
-mock_kybra = ModuleType("kybra")
+mock_basilisk = ModuleType("basilisk")
 mock_ic = MagicMock()
 mock_ic.time.return_value = int(time.time() * 1_000_000_000)
 mock_ic.caller.return_value = MagicMock(to_str=lambda: "aaaaa-aa")
 mock_ic.id.return_value = MagicMock(to_str=lambda: "bbbbb-bb")
+mock_ic.is_controller.return_value = False
 
-mock_kybra.ic = mock_ic
-mock_kybra.Opt = MockOpt
-mock_kybra.Principal = MagicMock
-mock_kybra.Record = MockRecord
-mock_kybra.StableBTreeMap = MockStableBTreeMap
-mock_kybra.Tuple = MockTuple
-mock_kybra.Variant = MockVariant
-mock_kybra.Vec = MockVec
-mock_kybra.blob = bytes
-mock_kybra.init = lambda f: f
-mock_kybra.nat = int
-mock_kybra.nat8 = int
-mock_kybra.query = lambda f: f
-mock_kybra.text = str
-mock_kybra.update = lambda f: f
-mock_kybra.void = type(None)
+mock_basilisk.ic = mock_ic
+mock_basilisk.Opt = MockOpt
+mock_basilisk.Principal = MagicMock
+mock_basilisk.Record = MockRecord
+mock_basilisk.StableBTreeMap = MockStableBTreeMap
+mock_basilisk.Tuple = MockTuple
+mock_basilisk.Variant = MockVariant
+mock_basilisk.Vec = MockVec
+mock_basilisk.blob = bytes
+mock_basilisk.init = lambda f: f
+mock_basilisk.nat = int
+mock_basilisk.nat8 = int
+mock_basilisk.null = None
+mock_basilisk.query = lambda f: f
+mock_basilisk.text = str
+mock_basilisk.update = lambda f: f
+mock_basilisk.void = type(None)
 
-sys.modules["kybra"] = mock_kybra
+sys.modules["basilisk"] = mock_basilisk
 
-# Mock kybra_simple_logging
-mock_logging = ModuleType("kybra_simple_logging")
+# Mock ic_python_logging
+mock_logging = ModuleType("ic_python_logging")
 mock_logger = MagicMock()
 mock_logging.get_logger = lambda name: mock_logger
-sys.modules["kybra_simple_logging"] = mock_logging
+sys.modules["ic_python_logging"] = mock_logging
 
 
-# Mock kybra_simple_db
+# Mock ic_python_db
 class MockStorage:
     """Mock storage for testing without requiring a real canister environment"""
 
@@ -192,12 +201,12 @@ class MockDatabase:
         pass
 
 
-mock_db = ModuleType("kybra_simple_db")
+mock_db = ModuleType("ic_python_db")
 mock_db.Database = MockDatabase
 mock_db.Entity = MockEntity
-mock_db.Integer = int
-mock_db.String = str
-sys.modules["kybra_simple_db"] = mock_db
+mock_db.Integer = lambda **kwargs: int
+mock_db.String = lambda **kwargs: str
+sys.modules["ic_python_db"] = mock_db
 
 # Add paths to match Kybra's import resolution
 sys.path.insert(
@@ -225,14 +234,19 @@ def test_token_constants():
     """Test token configuration constants"""
     try:
         # Import after mocking
-        from main import TOKEN_DECIMALS, TOKEN_FEE, TOKEN_NAME, TOKEN_SYMBOL
+        from main import (
+            DEFAULT_TOKEN_DECIMALS,
+            DEFAULT_TOKEN_FEE,
+            DEFAULT_TOKEN_NAME,
+            DEFAULT_TOKEN_SYMBOL,
+        )
 
         assert (
-            TOKEN_NAME == "Simple Token"
-        ), f"Expected 'Simple Token', got {TOKEN_NAME}"
-        assert TOKEN_SYMBOL == "SMPL", f"Expected 'SMPL', got {TOKEN_SYMBOL}"
-        assert TOKEN_DECIMALS == 8, f"Expected 8, got {TOKEN_DECIMALS}"
-        assert TOKEN_FEE == 10_000, f"Expected 10000, got {TOKEN_FEE}"
+            DEFAULT_TOKEN_NAME == "Simple Token"
+        ), f"Expected 'Simple Token', got {DEFAULT_TOKEN_NAME}"
+        assert DEFAULT_TOKEN_SYMBOL == "SMPL", f"Expected 'SMPL', got {DEFAULT_TOKEN_SYMBOL}"
+        assert DEFAULT_TOKEN_DECIMALS == 8, f"Expected 8, got {DEFAULT_TOKEN_DECIMALS}"
+        assert DEFAULT_TOKEN_FEE == 10_000, f"Expected 10000, got {DEFAULT_TOKEN_FEE}"
 
         print_success("token_constants tests passed")
         return True
@@ -992,6 +1006,71 @@ def test_mint_denied_without_test_mode():
         return False
 
 
+def test_update_token_metadata():
+    """Owner can rename the token display name and symbol."""
+    try:
+        from main import MetadataHelper, OwnerHelper, icrc1_symbol, update_token_metadata
+
+        OwnerHelper.set_owner("aaaaa-aa")
+        result = update_token_metadata(
+            {"name": "REALMS Token", "symbol": "REALMS"}
+        )
+        assert result["success"] is True, f"Update failed: {result}"
+        assert result["symbol"] == "REALMS"
+        assert MetadataHelper.get_symbol() == "REALMS"
+        assert icrc1_symbol() == "REALMS"
+
+        print_success("update_token_metadata tests passed")
+        return True
+    except Exception as e:
+        print_failure("update_token_metadata tests failed", str(e))
+        return False
+
+
+def test_update_token_metadata_in_test_mode():
+    """Any caller can rename in test mode (staging policy)."""
+    try:
+        from main import MetadataHelper, OwnerHelper, TokenConfig, update_token_metadata
+
+        OwnerHelper.set_owner("real-owner")
+        TokenConfig(key="test", value="true")
+        mock_ic.caller.return_value = MagicMock(to_str=lambda: "anonymous-staging-user")
+
+        result = update_token_metadata({"name": "REALMS Token", "symbol": "REALMS"})
+        assert result["success"] is True
+        assert MetadataHelper.get_symbol() == "REALMS"
+
+        mock_ic.caller.return_value = MagicMock(to_str=lambda: "aaaaa-aa")
+        print_success("update_token_metadata_in_test_mode tests passed")
+        return True
+    except Exception as e:
+        print_failure("update_token_metadata_in_test_mode tests failed", str(e))
+        return False
+
+
+def test_update_token_metadata_unauthorized():
+    """Non-owner/non-authority cannot rename the token."""
+    try:
+        from main import MetadataHelper, OwnerHelper, update_token_metadata
+
+        OwnerHelper.set_owner("real-owner")
+        # Ensure test mode is off so unauthorized path is exercised
+        from main import TokenConfig
+
+        TokenConfig(key="test", value="false")
+
+        result = update_token_metadata({"name": "Hacked", "symbol": "HAX"})
+        assert result["success"] is False
+        assert MetadataHelper.get_symbol() != "HAX"
+
+        mock_ic.caller.return_value = MagicMock(to_str=lambda: "aaaaa-aa")
+        print_success("update_token_metadata_unauthorized tests passed")
+        return True
+    except Exception as e:
+        print_failure("update_token_metadata_unauthorized tests failed", str(e))
+        return False
+
+
 def run_tests():
     """Run all tests and report results"""
     print(f"{BOLD}Running Token Backend Tests...{RESET}\n")
@@ -1017,6 +1096,9 @@ def run_tests():
         test_test_mode_config,
         test_mint_allowed_in_test_mode,
         test_mint_denied_without_test_mode,
+        test_update_token_metadata,
+        test_update_token_metadata_in_test_mode,
+        test_update_token_metadata_unauthorized,
         # Indexer tests
         test_transaction_helper_block_index,
         test_transaction_helper_log_transaction,

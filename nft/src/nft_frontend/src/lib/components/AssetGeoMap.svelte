@@ -122,7 +122,7 @@
       type: 'line',
       source: SOURCE_PARCELS,
       paint: {
-        'line-color': '#171717',
+        'line-color': '#0f172a',
         'line-width': 2,
       },
     });
@@ -215,13 +215,13 @@
     {:else}
       <div class="geo-map" bind:this={mapContainer}></div>
     {/if}
-    {#if geo.h3Indexes?.length}
+    {#if geo.h3Indexes?.length && !compact}
       <div class="geo-map-meta">
-        {#each geo.h3Indexes.slice(0, compact ? 1 : 3) as h3Index}
+        {#each geo.h3Indexes.slice(0, 3) as h3Index}
           <code>{h3Index}</code>
         {/each}
-        {#if geo.h3Indexes.length > (compact ? 1 : 3)}
-          <span class="muted">+{geo.h3Indexes.length - (compact ? 1 : 3)} more</span>
+        {#if geo.h3Indexes.length > 3}
+          <span class="muted">+{geo.h3Indexes.length - 3} more</span>
         {/if}
       </div>
     {/if}
@@ -248,27 +248,29 @@
   .geo-map-wrap.compact,
   .geo-grid-wrap.compact {
     margin-top: 0;
+    width: 100%;
+    height: 100%;
   }
 
   .geo-map-label {
-    font-size: 0.82rem;
+    font-size: 0.72rem;
     text-transform: uppercase;
-    letter-spacing: 0.06em;
-    color: var(--color-text-tertiary);
+    letter-spacing: 0.08em;
+    color: var(--text-tertiary);
     margin-bottom: 8px;
   }
 
   .geo-map {
     width: 100%;
     height: 280px;
-    border: 1px solid var(--color-border-primary);
-    border-radius: 4px;
+    border: 1px solid var(--border);
     overflow: hidden;
-    background: #f3f4f6;
+    background: #f5f5f5;
   }
 
   .compact .geo-map {
-    height: 120px;
+    height: 100%;
+    border: none;
   }
 
   .geo-map-meta {
@@ -282,17 +284,17 @@
   .geo-map-meta code {
     font-size: 0.72rem;
     padding: 2px 6px;
-    background: var(--color-bg-secondary);
-    border: 1px solid var(--color-border-primary);
-    border-radius: 3px;
+    background: var(--surface-2);
+    border: 1px solid var(--border);
+    color: var(--text-secondary);
   }
 
   .geo-map-fallback,
   .geo-grid {
-    border: 1px solid var(--color-border-primary);
-    border-radius: 4px;
+    border: 1px solid var(--border);
     padding: 16px;
-    background: var(--color-bg-secondary);
+    background: var(--surface-2);
+    color: var(--text-secondary);
   }
 
   .geo-grid {
@@ -301,14 +303,14 @@
   }
 
   .geo-grid-label {
-    font-size: 0.82rem;
+    font-size: 0.72rem;
     text-transform: uppercase;
-    letter-spacing: 0.06em;
-    color: var(--color-text-tertiary);
+    letter-spacing: 0.08em;
+    color: var(--text-tertiary);
   }
 
   .muted {
-    color: var(--color-text-tertiary);
-    font-size: 0.82rem;
+    color: var(--text-tertiary);
+    font-size: 0.78rem;
   }
 </style>

@@ -14,7 +14,6 @@
     resolveTokenGeo,
   } from '$lib/geo.js';
   import AssetDetail from '$lib/components/AssetDetail.svelte';
-  import AuthButton from '$lib/components/AuthButton.svelte';
 
   let loading = true;
   let error = '';
@@ -134,65 +133,32 @@
   <title>{token ? `Asset #${token.id}` : 'Asset'} — Realms Registry</title>
 </svelte:head>
 
-<main class="page">
-  <div class="page-head">
-    <div class="head-left">
-      <h1>Realms Registry</h1>
-      <p class="card-note">ICRC-7 / ICRC-37 tokenized assets on the Internet Computer.</p>
-    </div>
-    <AuthButton />
-  </div>
+{#if actionSuccess}
+  <div class="success-box">{actionSuccess}</div>
+{/if}
+{#if actionError}
+  <div class="error-box">{actionError}</div>
+{/if}
 
-  {#if actionSuccess}
-    <div class="success-box">{actionSuccess}</div>
-  {/if}
-  {#if actionError}
-    <div class="error-box">{actionError}</div>
-  {/if}
-
-  {#if loading}
-    <div class="loading">Loading asset…</div>
-  {:else if error}
-    <div class="error-box">{error}</div>
-  {:else if token}
-    <AssetDetail
-      {token}
-      {geo}
-      geoLoading={geoLoading}
-      {authorizedMinters}
-      onBack={goBack}
-      onAction={onAction}
-    />
-  {/if}
-</main>
+{#if loading}
+  <div class="loading">Loading asset…</div>
+{:else if error}
+  <div class="error-box">{error}</div>
+{:else if token}
+  <AssetDetail
+    {token}
+    {geo}
+    geoLoading={geoLoading}
+    {authorizedMinters}
+    onBack={goBack}
+    onAction={onAction}
+  />
+{/if}
 
 <style>
-  .page {
-    max-width: 1200px;
-    margin: 0 auto;
-    padding: 24px;
-  }
-
-  .page-head {
-    display: flex;
-    justify-content: space-between;
-    align-items: flex-start;
-    gap: 16px;
-    margin-bottom: 24px;
-  }
-
-  .head-left h1 {
-    margin: 0 0 4px;
-  }
-
   .loading,
   .success-box,
   .error-box {
     margin: 16px 0;
-  }
-
-  .card-note {
-    color: var(--color-text-secondary);
-    margin: 0;
   }
 </style>

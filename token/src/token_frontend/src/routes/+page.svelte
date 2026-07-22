@@ -23,6 +23,13 @@
   let mintResult = null;
   let mintError = null;
 
+  let canManageToken = false;
+  let editName = "";
+  let editSymbol = "";
+  let metadataSaving = false;
+  let metadataResult = null;
+  let metadataError = null;
+
   let distributionLoading = true;
   let distributionError = null;
   let holderCount = 0;
@@ -204,6 +211,37 @@
     }
   }
 
+  async function handleSaveMetadata() {
+    metadataResult = null;
+    metadataError = null;
+
+    const name = editName.trim();
+    const symbol = editSymbol.trim().toUpperCase();
+    if (!name || !symbol) {
+      metadataError = "Name and symbol are required";
+      return;
+    }
+
+    metadataSaving = true;
+    try {
+      const result = await backend.update_token_metadata({ name, symbol });
+      if (result.success) {
+        tokenName = result.name;
+        tokenSymbol = result.symbol;
+        editName = result.name;
+        editSymbol = result.symbol;
+        metadataResult = `Updated to ${result.name} (${result.symbol})`;
+      } else {
+        metadataError = result.error?.[0] || "Update failed";
+      }
+    } catch (e) {
+      console.error("Metadata update error:", e);
+      metadataError = e.message || "Failed to update token metadata";
+    } finally {
+      metadataSaving = false;
+    }
+  }
+
   async function handleMint() {
     mintResult = null;
     mintError = null;
@@ -255,13 +293,23 @@
         backend.is_test_mode(),
         backend.get_my_principal(),
       ]);
+      let manageToken = false;
+      try {
+        manageToken = await backend.can_manage_token();
+      } catch (e) {
+        console.warn("can_manage_token unavailable — upgrade token backend to enable renaming", e);
+      }
       tokenName = info.name;
       tokenSymbol = info.symbol;
+      editName = info.name;
+      editSymbol = info.symbol;
       decimals = Number(info.decimals);
       fee = Number(info.fee);
       totalSupply = formatSupply(info.total_supply, decimals);
       testMode = isTestMode;
       myPrincipal = principal;
+      // Test mode allows metadata edits on staging (same policy as mint).
+      canManageToken = manageToken || isTestMode;
       loading = false;
 
       await Promise.all([
@@ -321,6 +369,51 @@
           <div class="stat-unit">{tokenSymbol}</div>
         </div>
       </div>
+
+      <!-- Token identity (owner / authority / test mode) -->
+      {#if canManageToken}
+        <div class="card mint-card">
+          <h2>🏷️ Token identity</h2>
+          <p class="section-hint">
+            Update the display name and ticker shown across this dashboard and ICRC-1 metadata.
+          </p>
+          <div class="mint-form">
+            <div class="form-row">
+              <div class="form-group">
+                <label for="token-name">Name</label>
+                <input
+                  type="text"
+                  id="token-name"
+                  bind:value={editName}
+                  placeholder="REALMS Token"
+                  maxlength="64"
+                  disabled={metadataSaving}
+                />
+              </div>
+              <div class="form-group amount-group">
+                <label for="token-symbol">Symbol</label>
+                <input
+                  type="text"
+                  id="token-symbol"
+                  bind:value={editSymbol}
+                  placeholder="REALMS"
+                  maxlength="16"
+                  disabled={metadataSaving}
+                />
+              </div>
+              <button class="mint-button" on:click={handleSaveMetadata} disabled={metadataSaving}>
+                {metadataSaving ? "..." : "Save"}
+              </button>
+            </div>
+            {#if metadataResult}
+              <div class="mint-success">{metadataResult}</div>
+            {/if}
+            {#if metadataError}
+              <div class="mint-error">{metadataError}</div>
+            {/if}
+          </div>
+        </div>
+      {/if}
 
       <div class="main-grid">
         <!-- Distribution Section -->

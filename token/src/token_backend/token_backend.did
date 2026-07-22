@@ -94,6 +94,8 @@ type TransferResult = record { success : bool; block_index : opt nat; error : op
 type MintArgs = record { to : Account; amount : nat };
 type MintResult = record { success : bool; new_balance : opt nat; error : opt text; block_index : opt nat };
 type TokenMetadataRecord = record { name : text; symbol : text; decimals : nat8; fee : nat; total_supply : nat };
+type UpdateMetadataArgs = record { name : text; symbol : text };
+type UpdateMetadataResult = record { success : bool; error : opt text; name : text; symbol : text };
 type InitArgs = record { name : text; symbol : text; decimals : nat8; total_supply : nat; fee : nat; test : opt bool; initial_owner : opt principal };
 type ForcedTransferArgs = record { from : Account; to : Account; amount : nat; memo : opt text };
 type FreezeAccountArgs = record { account : Account; reason : opt text };
@@ -136,6 +138,8 @@ service : (InitArgs) -> {
   "is_account_frozen" : (Account) -> (FrozenStatus) query;
   "get_authority" : () -> (text) query;
   "get_owner" : () -> (text) query;
+  "can_manage_token" : () -> (bool) query;
+  "update_token_metadata" : (UpdateMetadataArgs) -> (UpdateMetadataResult);
   "get_token_info" : () -> (TokenMetadataRecord) query;
   "get_my_balance" : () -> (nat) query;
   "get_my_principal" : () -> (text) query;

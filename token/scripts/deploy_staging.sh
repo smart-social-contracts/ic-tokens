@@ -9,6 +9,11 @@
 
 set -e
 
+# dfx 0.29 panics with TERM=dumb/NO_COLOR (ColorOutOfRange). Use a real TTY term.
+export TERM="${TERM:-xterm-256color}"
+unset NO_COLOR FORCE_COLOR 2>/dev/null || true
+export DFX_WARNING="${DFX_WARNING:--mainnet_plaintext_identity}"
+
 # Parse arguments
 REINSTALL_MODE=false
 for arg in "$@"; do
@@ -55,9 +60,9 @@ echo "✓ Found existing staging canister IDs"
 echo "Installing Python dependencies..."
 pip install -q -r requirements.txt
 
-# Install frontend dependencies
+# Install frontend dependencies and build assets
 echo "Installing frontend dependencies..."
-cd src/token_frontend && npm install && cd ../..
+cd src/token_frontend && npm install && npx vite build && cd ../..
 
 # Deploy to staging (upgrade only, no creation)
 # --no-wallet prevents automatic canister creation
@@ -69,7 +74,11 @@ if [ "$REINSTALL_MODE" = true ]; then
     dfx deploy token_frontend --network staging --no-wallet --yes
 else
     echo "Deploying canisters to staging (upgrade only)..."
-    dfx deploy --network staging --no-wallet --yes
+    dfx deploy --network staging --no-wallet --yes || {
+        echo "Frontend upgrade failed — retrying after uninstall-code..."
+        dfx canister uninstall-code token_frontend --network staging || true
+        dfx deploy token_frontend --network staging --no-wallet --yes
+    }
 fi
 
 # Get canister IDs

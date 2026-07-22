@@ -116,6 +116,18 @@ class TokenMetadataRecord(Record):
     total_supply: nat
 
 
+class UpdateMetadataArgs(Record):
+    name: text
+    symbol: text
+
+
+class UpdateMetadataResult(Record):
+    success: bool
+    error: Opt[text]
+    name: text
+    symbol: text
+
+
 class InitArgs(Record):
     name: text
     symbol: text
@@ -217,6 +229,19 @@ class MetadataHelper:
     @staticmethod
     def get_fee():
         return int(MetadataHelper._get("fee", DEFAULT_TOKEN_FEE))
+
+
+def _validate_metadata(name: str, symbol: str):
+    """Return (name, symbol, error) after normalizing user input."""
+    clean_name = (name or "").strip()
+    clean_symbol = (symbol or "").strip().upper()
+    if not clean_name or len(clean_name) > 64:
+        return None, None, "name must be 1-64 characters"
+    if not clean_symbol or len(clean_symbol) > 16:
+        return None, None, "symbol must be 1-16 characters"
+    if not all(ch.isalnum() or ch == "_" for ch in clean_symbol):
+        return None, None, "symbol must be alphanumeric (underscore allowed)"
+    return clean_name, clean_symbol, None
 
 
 class TokenHelper:
@@ -548,8 +573,7 @@ def mint(args: MintArgs) -> MintResult:
         f"Mint request from {caller}: {args['amount']} to {args['to']['owner'].to_str()}"
     )
 
-    test_mode = TokenConfig["test"] and TokenConfig["test"].value == "true"
-    if not OwnerHelper.is_owner(caller) and not test_mode:
+    if not OwnerHelper.is_owner(caller) and not _is_test_mode():
         logger.warning(f"Unauthorized mint attempt by {caller}")
         return MintResult(
             success=False,
@@ -769,6 +793,52 @@ def get_owner() -> text:
 
 
 @query
+def can_manage_token() -> bool:
+    """True when the caller can update token metadata."""
+    if _is_test_mode():
+        return True
+    caller = ic.caller()
+    if OwnerHelper.is_owner(caller.to_str()):
+        return True
+    return AuthorityHelper.is_authority(caller)
+
+
+@update
+def update_token_metadata(args: UpdateMetadataArgs) -> UpdateMetadataResult:
+    """Update display name and ticker symbol (owner, authority, or test mode)."""
+    caller = ic.caller()
+    if (
+        not _is_test_mode()
+        and not OwnerHelper.is_owner(caller.to_str())
+        and not AuthorityHelper.is_authority(caller)
+    ):
+        return UpdateMetadataResult(
+            success=False,
+            error="Only the token owner or ledger authority can update metadata",
+            name=MetadataHelper.get_name(),
+            symbol=MetadataHelper.get_symbol(),
+        )
+
+    name, symbol, err = _validate_metadata(args.get("name"), args.get("symbol"))
+    if err:
+        return UpdateMetadataResult(
+            success=False,
+            error=err,
+            name=MetadataHelper.get_name(),
+            symbol=MetadataHelper.get_symbol(),
+        )
+
+    MetadataHelper.set("name", name)
+    MetadataHelper.set("symbol", symbol)
+    logger.info(
+        f"Token metadata updated by {caller.to_str()}: name={name}, symbol={symbol}"
+    )
+    return UpdateMetadataResult(
+        success=True, error=None, name=name, symbol=symbol
+    )
+
+
+@query
 def get_token_info() -> TokenMetadataRecord:
     return TokenMetadataRecord(
         name=MetadataHelper.get_name(),
@@ -789,10 +859,14 @@ def get_my_principal() -> text:
     return ic.caller().to_str()
 
 
-@query
-def is_test_mode() -> bool:
+def _is_test_mode() -> bool:
     config = TokenConfig["test"]
     return config is not None and config.value == "true"
+
+
+@query
+def is_test_mode() -> bool:
+    return _is_test_mode()
 
 
 @query

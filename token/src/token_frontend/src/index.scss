@@ -322,6 +322,12 @@ main {
   margin-top: 0;
 }
 
+.section-hint {
+  margin: 0 0 16px;
+  color: var(--color-text-secondary);
+  font-size: 0.875rem;
+}
+
 .mint-form .form-row {
   display: flex;
   gap: 12px;
