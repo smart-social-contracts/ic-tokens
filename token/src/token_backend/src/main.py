@@ -108,6 +108,12 @@ class MintResult(Record):
     block_index: Opt[nat]
 
 
+class TestTransferArgs(Record):
+    from_owner: text
+    to: Account
+    amount: nat
+
+
 class TokenMetadataRecord(Record):
     name: text
     symbol: text
@@ -512,19 +518,36 @@ def icrc1_transfer(args: TransferArgs) -> TransferResult:
     logger.info(
         f"Transfer request: {caller} -> {args['to']['owner'].to_str()}, amount: {args['amount']}"
     )
+    fee = args.get("fee") if args.get("fee") is not None else MetadataHelper.get_fee()
+    return _execute_transfer(
+        caller,
+        args.get("from_subaccount"),
+        args["to"],
+        args["amount"],
+        fee,
+        args.get("memo"),
+    )
 
-    frozen = FreezeHelper.get_frozen(caller, args.get("from_subaccount"))
+
+def _execute_transfer(
+    from_owner: str,
+    from_subaccount,
+    to_account: Account,
+    amount: nat,
+    fee: nat,
+    memo,
+) -> TransferResult:
+    frozen = FreezeHelper.get_frozen(from_owner, from_subaccount)
     if frozen:
-        logger.warning(f"Transfer blocked: account {caller} is frozen")
+        logger.warning(f"Transfer blocked: account {from_owner} is frozen")
         return TransferResult(
             success=False,
             block_index=None,
             error="Account is frozen by the ledger authority",
         )
 
-    sender_balance = TokenHelper.get_balance(caller, args.get("from_subaccount"))
-    fee = args.get("fee") if args.get("fee") is not None else MetadataHelper.get_fee()
-    total_deduction = args["amount"] + fee
+    sender_balance = TokenHelper.get_balance(from_owner, from_subaccount)
+    total_deduction = amount + fee
 
     if sender_balance < total_deduction:
         logger.warning(f"Insufficient balance: {sender_balance} < {total_deduction}")
@@ -534,36 +557,73 @@ def icrc1_transfer(args: TransferArgs) -> TransferResult:
             error=f"Insufficient balance. Have {sender_balance}, need {total_deduction}",
         )
 
-    recipient = args["to"]["owner"].to_str()
-    recipient_balance = TokenHelper.get_balance(recipient, args["to"].get("subaccount"))
+    recipient = to_account["owner"].to_str()
+    if recipient == from_owner and not from_subaccount and not to_account.get("subaccount"):
+        return TransferResult(
+            success=False,
+            block_index=None,
+            error="Sender and recipient must differ",
+        )
+
+    recipient_balance = TokenHelper.get_balance(recipient, to_account.get("subaccount"))
 
     TokenHelper.set_balance(
-        caller, sender_balance - total_deduction, args.get("from_subaccount")
+        from_owner, sender_balance - total_deduction, from_subaccount
     )
     TokenHelper.set_balance(
-        recipient, recipient_balance + args["amount"], args["to"].get("subaccount")
+        recipient, recipient_balance + amount, to_account.get("subaccount")
     )
 
     current_supply = TokenHelper.get_total_supply()
     TokenHelper.set_total_supply(current_supply - fee)
 
-    # Log the transaction for indexer
     block_index = TransactionHelper.log_transaction(
         kind="transfer",
-        from_owner=caller,
-        from_subaccount=args.get("from_subaccount"),
+        from_owner=from_owner,
+        from_subaccount=from_subaccount,
         to_owner=recipient,
-        to_subaccount=args["to"].get("subaccount"),
-        amount=args["amount"],
+        to_subaccount=to_account.get("subaccount"),
+        amount=amount,
         fee=fee,
-        memo=args.get("memo"),
+        memo=memo,
     )
 
     logger.info(
-        f"Transfer successful: {args['amount']} tokens transferred, block_index={block_index}"
+        f"Transfer successful: {amount} tokens {from_owner} -> {recipient}, block_index={block_index}"
     )
 
     return TransferResult(success=True, block_index=block_index, error=None)
+
+
+@update
+def test_transfer(args: TestTransferArgs) -> TransferResult:
+    """Transfer from any principal — test mode only (no caller authentication)."""
+    if not _is_test_mode():
+        return TransferResult(
+            success=False,
+            block_index=None,
+            error="test_transfer is only available in test mode",
+        )
+
+    from_owner = (args.get("from_owner") or "").strip()
+    if not from_owner:
+        return TransferResult(
+            success=False,
+            block_index=None,
+            error="from_owner is required",
+        )
+
+    logger.info(
+        f"Test transfer: {from_owner} -> {args['to']['owner'].to_str()}, amount: {args['amount']}"
+    )
+    return _execute_transfer(
+        from_owner,
+        None,
+        args["to"],
+        args["amount"],
+        MetadataHelper.get_fee(),
+        None,
+    )
 
 
 @update

@@ -1,6 +1,8 @@
 <script>
   import "../index.scss";
   import { backend } from "$lib/canisters";
+  import { login, logout, restoreAuthSession } from "$lib/auth.js";
+  import { isAuthenticated, principal as authPrincipal } from "$lib/stores/auth.js";
   import { Principal } from "@dfinity/principal";
   import { onMount, onDestroy } from "svelte";
   import { Chart, PieController, ArcElement, Tooltip, Legend } from "chart.js";
@@ -17,6 +19,8 @@
 
   let testMode = false;
   let myPrincipal = "";
+  let myBalance = null;
+  let authBusy = false;
   let mintRecipient = "";
   let mintAmount = "";
   let minting = false;
@@ -29,6 +33,14 @@
   let metadataSaving = false;
   let metadataResult = null;
   let metadataError = null;
+
+  let transferFrom = "";
+  let transferTo = "";
+  let transferAmount = "";
+  let fromBalance = null;
+  let transferring = false;
+  let transferResult = null;
+  let transferError = null;
 
   let distributionLoading = true;
   let distributionError = null;
@@ -92,6 +104,31 @@
     if (diff < 3600000) return `${Math.floor(diff / 60000)}m ago`;
     if (diff < 86400000) return `${Math.floor(diff / 3600000)}h ago`;
     return date.toLocaleDateString();
+  }
+
+  async function refreshAccount() {
+    myPrincipal = await backend.get_my_principal();
+    myBalance = await backend.get_my_balance();
+    if (!testMode || !transferFrom.trim()) {
+      transferFrom = myPrincipal;
+    }
+  }
+
+  async function refreshFromBalance() {
+    const from = (testMode ? transferFrom : myPrincipal).trim();
+    if (!from) {
+      fromBalance = null;
+      return;
+    }
+    try {
+      const owner = Principal.fromText(from);
+      fromBalance = await backend.icrc1_balance_of({
+        owner,
+        subaccount: [],
+      });
+    } catch (e) {
+      fromBalance = null;
+    }
   }
 
   async function refreshTokenInfo() {
@@ -272,6 +309,7 @@
       if (result.success) {
         mintResult = `Minted ${mintAmount} ${tokenSymbol}`;
         mintAmount = "";
+        await refreshAccount();
         await refreshTokenInfo();
         await loadDistribution();
         await loadRecentTransactions();
@@ -286,12 +324,131 @@
     }
   }
 
+  async function handleLogin() {
+    authBusy = true;
+    transferError = null;
+    try {
+      await login();
+      await refreshAccount();
+    } catch (e) {
+      console.error("Login error:", e);
+      transferError = e.message || "Failed to sign in";
+    } finally {
+      authBusy = false;
+    }
+  }
+
+  async function handleLogout() {
+    authBusy = true;
+    try {
+      await logout();
+      await refreshAccount();
+    } catch (e) {
+      console.error("Logout error:", e);
+    } finally {
+      authBusy = false;
+    }
+  }
+
+  async function handleTransfer() {
+    transferResult = null;
+    transferError = null;
+
+    const sender = (testMode ? transferFrom : myPrincipal).trim();
+    const recipient = transferTo.trim();
+    const amount = parseAmount(transferAmount, decimals);
+
+    if (!sender) {
+      transferError = testMode ? "Enter a sender principal" : "Sign in to transfer tokens";
+      return;
+    }
+    if (!recipient) {
+      transferError = "Enter a recipient principal";
+      return;
+    }
+    if (!amount) {
+      transferError = "Please enter a valid amount greater than 0";
+      return;
+    }
+
+    let recipientPrincipal;
+    try {
+      recipientPrincipal = Principal.fromText(recipient);
+    } catch (e) {
+      transferError = "Invalid recipient principal address";
+      return;
+    }
+
+    if (testMode) {
+      try {
+        Principal.fromText(sender);
+      } catch (e) {
+        transferError = "Invalid sender principal address";
+        return;
+      }
+    }
+
+    if (recipient === sender) {
+      transferError = "Sender and recipient must differ";
+      return;
+    }
+
+    const totalCost = amount + BigInt(fee);
+    const senderBalance = testMode ? fromBalance : myBalance;
+    if (senderBalance !== null && senderBalance < totalCost) {
+      transferError = `Insufficient balance (need ${formatAmount(totalCost, decimals)} ${tokenSymbol} including fee)`;
+      return;
+    }
+
+    transferring = true;
+    try {
+      let result;
+      if (testMode) {
+        result = await backend.test_transfer({
+          from_owner: sender,
+          to: { owner: recipientPrincipal, subaccount: [] },
+          amount,
+        });
+      } else {
+        result = await backend.icrc1_transfer({
+          to: { owner: recipientPrincipal, subaccount: [] },
+          amount,
+          fee: [],
+          memo: [],
+          from_subaccount: [],
+          created_at_time: [],
+        });
+      }
+
+      if (result.success) {
+        const block = result.block_index?.[0];
+        transferResult = block
+          ? `Sent ${transferAmount} ${tokenSymbol} from ${truncateAddress(sender)} to ${truncateAddress(recipient)} (tx #${block})`
+          : `Sent ${transferAmount} ${tokenSymbol} from ${truncateAddress(sender)} to ${truncateAddress(recipient)}`;
+        transferAmount = "";
+        await refreshAccount();
+        await refreshFromBalance();
+        await refreshTokenInfo();
+        await loadDistribution();
+        await loadRecentTransactions();
+      } else {
+        transferError = result.error?.[0] || "Transfer failed";
+      }
+    } catch (e) {
+      console.error("Transfer error:", e);
+      transferError = e.message || "Failed to transfer tokens";
+    } finally {
+      transferring = false;
+    }
+  }
+
   onMount(async () => {
     try {
-      const [info, isTestMode, principal] = await Promise.all([
+      await restoreAuthSession();
+
+      const [info, isTestMode] = await Promise.all([
         backend.get_token_info(),
         backend.is_test_mode(),
-        backend.get_my_principal(),
       ]);
       let manageToken = false;
       try {
@@ -307,9 +464,12 @@
       fee = Number(info.fee);
       totalSupply = formatSupply(info.total_supply, decimals);
       testMode = isTestMode;
-      myPrincipal = principal;
-      // Test mode allows metadata edits on staging (same policy as mint).
       canManageToken = manageToken || isTestMode;
+      await refreshAccount();
+      if (testMode) {
+        transferFrom = myPrincipal;
+        await refreshFromBalance();
+      }
       loading = false;
 
       await Promise.all([
@@ -414,6 +574,94 @@
           </div>
         </div>
       {/if}
+
+      <!-- Transfer tokens -->
+      <div class="card mint-card transfer-card">
+        <h2>💸 Transfer Tokens</h2>
+        <p class="section-hint">
+          {#if testMode}
+            Test mode: transfer from any sender principal to any recipient without signing in.
+          {:else}
+            Send {tokenSymbol} from your connected identity to another principal.
+          {/if}
+          Transfer fee: {formatAmount(fee, decimals)} {tokenSymbol}.
+        </p>
+        {#if testMode && fromBalance !== null}
+          <p class="balance-hint">
+            Sender balance: <strong>{formatAmount(fromBalance, decimals)} {tokenSymbol}</strong>
+          </p>
+        {:else if !testMode && myBalance !== null}
+          <p class="balance-hint">
+            Your balance: <strong>{formatAmount(myBalance, decimals)} {tokenSymbol}</strong>
+          </p>
+        {/if}
+
+        {#if !testMode}
+          <div class="auth-row">
+            {#if $isAuthenticated}
+              <span class="auth-status">Signed in as {truncateAddress($authPrincipal)}</span>
+              <button type="button" class="auth-button secondary" on:click={handleLogout} disabled={authBusy}>
+                Sign out
+              </button>
+            {:else}
+              <span class="auth-status">Sign in with Internet Identity to send as your principal</span>
+              <button type="button" class="auth-button" on:click={handleLogin} disabled={authBusy}>
+                {authBusy ? "..." : "Sign in"}
+              </button>
+            {/if}
+          </div>
+        {/if}
+
+        <div class="mint-form">
+          <div class="form-row transfer-row">
+            <div class="form-group">
+              <label for="transfer-from">From (sender)</label>
+              <input
+                type="text"
+                id="transfer-from"
+                bind:value={transferFrom}
+                readonly={!testMode}
+                placeholder={testMode ? "Sender principal" : myPrincipal}
+                title={testMode ? transferFrom : myPrincipal}
+                disabled={transferring}
+                on:change={refreshFromBalance}
+                on:blur={refreshFromBalance}
+              />
+            </div>
+            <div class="form-group">
+              <label for="transfer-to">To (recipient)</label>
+              <input
+                type="text"
+                id="transfer-to"
+                bind:value={transferTo}
+                placeholder="Recipient principal"
+                disabled={transferring}
+              />
+            </div>
+            <div class="form-group amount-group">
+              <label for="transfer-amount">Amount</label>
+              <input
+                type="number"
+                id="transfer-amount"
+                bind:value={transferAmount}
+                placeholder="0.00"
+                min="0"
+                step="any"
+                disabled={transferring}
+              />
+            </div>
+            <button class="mint-button" on:click={handleTransfer} disabled={transferring}>
+              {transferring ? "..." : "Transfer"}
+            </button>
+          </div>
+          {#if transferResult}
+            <div class="mint-success">{transferResult}</div>
+          {/if}
+          {#if transferError}
+            <div class="mint-error">{transferError}</div>
+          {/if}
+        </div>
+      </div>
 
       <div class="main-grid">
         <!-- Distribution Section -->

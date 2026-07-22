@@ -1,10 +1,16 @@
 <script>
   import "../index.scss";
+  import { onMount } from "svelte";
+  import { restoreAuthSession } from "$lib/auth.js";
   
   const version = __APP_VERSION__ || "dev";
   const commitHash = __COMMIT_HASH__ || "local";
   const buildTime = __BUILD_TIME__ || new Date().toISOString();
   const repoUrl = "https://github.com/smart-social-contracts/kybra-simple-token";
+
+  onMount(async () => {
+    await restoreAuthSession();
+  });
 </script>
 
 <div class="app-container">

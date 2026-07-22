@@ -1071,6 +1071,55 @@ def test_update_token_metadata_unauthorized():
         return False
 
 
+def test_test_transfer():
+    """In test mode, transfer from an arbitrary sender without caller auth."""
+    try:
+        from main import TokenConfig, TokenHelper, test_transfer
+
+        TokenConfig(key="test", value="true")
+        TokenHelper.set_balance("alice", 5_000_000)
+        TokenHelper.set_balance("bob", 0)
+
+        result = test_transfer(
+            {
+                "from_owner": "alice",
+                "to": {"owner": MagicMock(to_str=lambda: "bob"), "subaccount": None},
+                "amount": 1_000_000,
+            }
+        )
+        assert result["success"] is True, f"Transfer failed: {result}"
+        assert TokenHelper.get_balance("alice") == 3_990_000  # amount + default fee
+        assert TokenHelper.get_balance("bob") == 1_000_000
+
+        print_success("test_transfer tests passed")
+        return True
+    except Exception as e:
+        print_failure("test_transfer tests failed", str(e))
+        return False
+
+
+def test_test_transfer_denied_without_test_mode():
+    try:
+        from main import TokenConfig, test_transfer
+
+        TokenConfig(key="test", value="false")
+        result = test_transfer(
+            {
+                "from_owner": "alice",
+                "to": {"owner": MagicMock(to_str=lambda: "bob"), "subaccount": None},
+                "amount": 1,
+            }
+        )
+        assert result["success"] is False
+        assert "test mode" in result["error"].lower()
+
+        print_success("test_transfer_denied_without_test_mode tests passed")
+        return True
+    except Exception as e:
+        print_failure("test_transfer_denied_without_test_mode tests failed", str(e))
+        return False
+
+
 def run_tests():
     """Run all tests and report results"""
     print(f"{BOLD}Running Token Backend Tests...{RESET}\n")
@@ -1099,6 +1148,8 @@ def run_tests():
         test_update_token_metadata,
         test_update_token_metadata_in_test_mode,
         test_update_token_metadata_unauthorized,
+        test_test_transfer,
+        test_test_transfer_denied_without_test_mode,
         # Indexer tests
         test_transaction_helper_block_index,
         test_transaction_helper_log_transaction,

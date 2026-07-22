@@ -93,6 +93,7 @@ type TransferArgs = record { from_subaccount : opt blob; to : Account; amount : 
 type TransferResult = record { success : bool; block_index : opt nat; error : opt text };
 type MintArgs = record { to : Account; amount : nat };
 type MintResult = record { success : bool; new_balance : opt nat; error : opt text; block_index : opt nat };
+type TestTransferArgs = record { from_owner : text; to : Account; amount : nat };
 type TokenMetadataRecord = record { name : text; symbol : text; decimals : nat8; fee : nat; total_supply : nat };
 type UpdateMetadataArgs = record { name : text; symbol : text };
 type UpdateMetadataResult = record { success : bool; error : opt text; name : text; symbol : text };
@@ -130,6 +131,7 @@ service : (InitArgs) -> {
   "icrc1_metadata" : () -> (vec MetadataEntry) query;
   "icrc1_supported_standards" : () -> (vec MetadataEntry) query;
   "icrc1_transfer" : (TransferArgs) -> (TransferResult);
+  "test_transfer" : (TestTransferArgs) -> (TransferResult);
   "mint" : (MintArgs) -> (MintResult);
   "forced_transfer" : (ForcedTransferArgs) -> (AuthorityResult);
   "freeze_account" : (FreezeAccountArgs) -> (AuthorityResult);
