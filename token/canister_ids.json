@@ -1,8 +1,10 @@
 {
   "token_backend": {
-    "staging": "2rqin-xaaaa-aaaah-qunsq-cai"
+    "staging": "cj65k-laaaa-aaaac-bfxqq-cai",
+    "test": "nusyl-jiaaa-aaaae-qj6mq-cai"
   },
   "token_frontend": {
-    "staging": "2ytdr-biaaa-aaaah-qunta-cai"
+    "staging": "hjb56-xiaaa-aaaac-bfxna-cai",
+    "test": "33mmr-pyaaa-aaaam-ai47q-cai"
   }
 }

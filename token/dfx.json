@@ -25,9 +25,6 @@
       "init_arg": "(record { name = \"Simple Token\"; symbol = \"SMPL\"; decimals = 8 : nat8; total_supply = 100_000_000_000_000_000 : nat; fee = 10_000 : nat; test = opt true; initial_owner = null })"
     },
     "token_frontend": {
-      "dependencies": [
-        "token_backend"
-      ],
       "source": [
         "src/token_frontend/dist"
       ],
@@ -41,6 +38,10 @@
       "type": "ephemeral"
     },
     "staging": {
+      "providers": ["https://icp0.io"],
+      "type": "persistent"
+    },
+    "test": {
       "providers": ["https://icp0.io"],
       "type": "persistent"
     },
